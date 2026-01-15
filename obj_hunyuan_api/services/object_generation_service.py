@@ -54,7 +54,6 @@ conf.multiview_cfg_path = f"{repo_base_path}/hy3dpaint/cfgs/hunyuan-paint-pbr.ya
 conf.custom_pipeline = f"{repo_base_path}/hy3dpaint/hunyuanpaintpbr"
 paint_pipeline = Hunyuan3DPaintPipeline(conf)
 
-
 def generate_object(prompt_img_id: str):
 
     img_path = f"{gen_images_dir}/{prompt_img_id}.png"
