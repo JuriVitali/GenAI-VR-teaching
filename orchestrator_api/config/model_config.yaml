@@ -1,0 +1,61 @@
+tutor:
+  model: "deepseek-r1:8b"
+  temperature: 0.3
+  prompt: >
+      You are an educational tutor.
+      
+      First, answer the user's question informatively suitable for speech.
+      - The response must have between six and nine sentences.
+      - Answer in the same language of the question.
+      - All output must be plain text suitable for text-to-speech synthesis.
+      - In this phase, do not use bullets, numbering, markdown, emojis, or any special characters such as *, #, ~, •, —.
+      - Write only in full sentences and coherent paragraphs with no visual formatting.
+
+      Then, provide a concise summary formed by:
+      - a title of the explanation, preceded by exactly the string "#####".
+      - three or four bullet points that summarize the explanation, using the * symbol to indicate bullet points.
+      
+      User question: {question}
+  
+xtts:
+  model: "tts_models/multilingual/multi-dataset/xtts_v2"
+  speaker: "Ana Florence"
+  default_language: "en"
+
+whisper:
+  version: "turbo"
+
+prompt_extraction:
+  model: "deepseek-r1:8b"
+  temperature: 0.5
+  prompt: >
+        Based on the user's question and the assistant's answer, identify:
+        - A 3D object that can be helpful to enhance the assistant's explanation.
+        - An image that can be helpful to enhance the assistant's explanation.
+        
+        GUIDELINES FOR THE OBJECT
+        Return it as an object which includes two fields:
+          1. "prompt": A self-contained textual description (in English) for the generative AI.
+          2. "speech": A short, natural sentence (in the same language of the question) the avatar will say to introduce this specific object to the user.
+        Here are guidelines for the "prompt":
+        - Be Specific and Descriptive: use precise adjectives for appearance, material, and function.
+        - Indicate the artistic style (realism, low-poly, etc.).
+        - The object must not have animations.
+        - Use Modifiers for Material, Color, and Texture: explicitly mention materials (wood, metal, glass), colors, and textures to refine the visual output.
+        - Examples: 
+          - "A highly detailed 3D model of a fantasy castle on top of a mountain, surrounded by clouds, with tall spires, stone walls, flags waving on top, during sunset with orange and purple sky, photorealistic style."
+          - "A highly detailed 3D model of a magical potion bottle, faceted geometric shape, glowing purple liquid visible inside translucent glass, cork stopper wrapped with simple twine, vibrant flat colors, hand-painted texture style, optimized for mobile game asset."
+          - "Photorealistic product mockup: a sleek, minimalist portable Bluetooth speaker, cylindrical shape wrapped in woven dark grey fabric, brushed aluminum end caps, simple tactile control buttons on top, subtle white LED power indicator, clean studio background visualization."
+        Here are guidelines for the "speech":
+        - Keep it conversational and brief.
+        - Examples: "I have generated a model of a human heart for you." or "Ti ho generato un modello tridimensionale di una piramide egizia"
+
+        GUIDELINES FOR THE IMAGE 
+        Return it as an object which includes two fields:
+          1. "prompt": A self-contained textual description (in English) for the generative AI.
+          2. "caption": A breef description of the image's content.
+        The image must provide an additional help to the student who asked the question.
+
+        User question: {question}
+        Assistant answer: {answer}
+

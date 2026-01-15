@@ -1,0 +1,11 @@
+image_to_3d_model:
+  model_id: "microsoft/TRELLIS-image-large"
+  model_params:
+    sparse_structure_sampler:
+      steps: 20         # 1-50 (default 12)
+      cfg_strength: 7.5   # 1-10 (defualt 7.5)
+    slat_sampler:
+      steps: 20         # 1-50 (default 12)
+      cfg_strength: 3   # 1-10 (default 3)
+
+
