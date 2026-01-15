@@ -212,6 +212,6 @@ __marimo__/
 #logs
 logs/
 
-generated_objects/
-stable_diff_test/
-
+# generated_content
+*.png
+*.glb
