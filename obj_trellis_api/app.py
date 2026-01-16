@@ -1,6 +1,8 @@
 import sys
 import os
 import uuid
+
+from requests import session
 import structlog
 import logging
 from flask import Flask, request
@@ -30,9 +32,10 @@ def create_app():
     def bind_request_details():
         # Get RID from headers (sent by Orchestrator) or generate new one
         rid = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+        session_id = request.headers.get("X-Session-ID")
         # Bind rid so all logs in this request context have it
         structlog.contextvars.clear_contextvars()
-        structlog.contextvars.bind_contextvars(rid=rid)
+        structlog.contextvars.bind_contextvars(rid=rid, session_id=session_id)
 
     app.register_blueprint(gen_bp, url_prefix="/api")
     return app
