@@ -7,6 +7,8 @@ import structlog
 import logging
 from dotenv import load_dotenv, find_dotenv
 from flask import Flask, request
+from services.rag_singleton import init_rag_from_env
+
 
 root_dir = "/home/vrai/Copy"
 if root_dir not in sys.path:
@@ -25,6 +27,9 @@ PORT = os.getenv("ORCHESTRATOR_PORT")
 
 def create_app():
     app = Flask(__name__)
+
+    # Init RAG once at startup
+    init_rag_from_env()
 
     @app.before_request
     def start_trace():

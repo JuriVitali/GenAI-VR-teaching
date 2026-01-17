@@ -14,6 +14,9 @@ import os
 import tempfile
 import re
 from shared.utils import log_event
+from services.rag_singleton import rag, rag_ready
+
+
 
 # Load environment variables
 load_dotenv(find_dotenv())
@@ -49,7 +52,16 @@ def transcribe_audio(audio_path):
 def stream_text_answer_by_sentence(question: str):
     structlog.contextvars.bind_contextvars(question=question)
 
-    prompt = tutor_config["prompt"].format(question=question)
+    if rag_ready():
+        context, sources = rag.retrieve_context(question, k=5, use_mmr=True)
+        structlog.contextvars.bind_contextvars(rag_sources=sources)
+    else:
+        context, sources = "", []
+
+    prompt = tutor_config["prompt"].format(question=question, context=context)
+
+
+
     buffer = ""
     
     # State flags
