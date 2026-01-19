@@ -16,7 +16,7 @@ class RagService:
         chunk_size: int = 900,
         chunk_overlap: int = 150,
     ):
-        self.persist_dir = os.getenv("RAG_PERSIST_DIR", persist_dir)
+        self.persist_dir = persist_dir
         self.collection_name = collection_name
 
         os.makedirs(self.persist_dir, exist_ok=True)

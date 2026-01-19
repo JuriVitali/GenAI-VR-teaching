@@ -14,7 +14,8 @@ import os
 import tempfile
 import re
 from shared.utils import log_event
-from services.rag_singleton import rag, rag_ready
+from services.rag_singleton import rag_manager
+
 
 
 
@@ -49,18 +50,19 @@ def transcribe_audio(audio_path):
 
 
 @log_event("text_answer_generation")
-def stream_text_answer_by_sentence(question: str):
+def stream_text_answer_by_sentence(question: str, pdf_name: str | None):
     structlog.contextvars.bind_contextvars(question=question)
 
-    if rag_ready():
-        context, sources = rag.retrieve_context(question, k=5, use_mmr=True)
-        structlog.contextvars.bind_contextvars(rag_sources=sources)
-    else:
-        context, sources = "", []
+    context, sources = "", []
+    if pdf_name:
+        try:
+            context, sources = rag_manager.retrieve_context(pdf_name, question, k=5)
+            structlog.contextvars.bind_contextvars(rag_sources=sources, rag_pdf=pdf_name)
+        except Exception:
+            structlog.contextvars.bind_contextvars(rag_pdf=pdf_name, rag_error="retrieve_failed")
+            context, sources = "", []
 
     prompt = tutor_config["prompt"].format(question=question, context=context)
-
-
 
     buffer = ""
     
