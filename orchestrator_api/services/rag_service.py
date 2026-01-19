@@ -52,6 +52,8 @@ class RagService:
             persist_directory=self.persist_dir,
         )
         self.vdb.add_documents(chunks)
+
+
         return len(chunks)
 
     def retrieve_context(
@@ -61,6 +63,14 @@ class RagService:
         use_mmr: bool = True,
         fetch_k: int = 20,
     ) -> Tuple[str, List[dict]]:
+        print("=== RETRIEVE START ===")
+        print("CWD:", os.getcwd())
+        print("persist_dir:", os.path.abspath(self.persist_dir))
+        print("collection:", self.collection_name)
+        print("count in chroma:", self.vdb._collection.count())
+        print("question:", question)
+        print("======================")
+
         if use_mmr:
             retriever = self.vdb.as_retriever(
                 search_type="mmr",
@@ -72,7 +82,13 @@ class RagService:
                 search_kwargs={"k": k},
             )
 
-        docs = retriever.get_relevant_documents(question)
+        try:
+            docs = retriever.invoke(question)
+            print("retrieved docs:", len(docs))
+        except Exception as e:
+            print("RETRIEVE EXCEPTION:", repr(e))
+            raise
+
         if not docs:
             return "", []
 

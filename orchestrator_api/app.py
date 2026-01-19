@@ -7,7 +7,7 @@ import structlog
 import logging
 from dotenv import load_dotenv, find_dotenv
 from flask import Flask, request
-from services.rag_singleton import init_rag_from_env
+
 
 
 root_dir = "/home/vrai/Copy"
@@ -18,9 +18,9 @@ from shared.logger import setup_logging
 
 logger = setup_logging("orchestrator_api")
 
-from controllers.controller import chat_bp
-from websocket.socketio_instance import socketio
-import websocket.ws_handlers
+from orchestrator_api.controllers.controller import chat_bp
+from orchestrator_api.websocket.socketio_instance import socketio
+import orchestrator_api.websocket.ws_handlers
 
 load_dotenv(find_dotenv())
 PORT = os.getenv("ORCHESTRATOR_PORT")
@@ -28,8 +28,6 @@ PORT = os.getenv("ORCHESTRATOR_PORT")
 def create_app():
     app = Flask(__name__)
 
-    # Init RAG once at startup
-    init_rag_from_env()
 
     @app.before_request
     def start_trace():
