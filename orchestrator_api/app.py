@@ -8,6 +8,8 @@ import logging
 from dotenv import load_dotenv, find_dotenv
 from flask import Flask, request
 
+
+
 root_dir = "/home/vrai/Copy"
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
@@ -16,15 +18,16 @@ from shared.logger import setup_logging
 
 logger = setup_logging("orchestrator_api")
 
-from controllers.controller import chat_bp
-from websocket.socketio_instance import socketio
-import websocket.ws_handlers
+from orchestrator_api.controllers.controller import chat_bp
+from orchestrator_api.websocket.socketio_instance import socketio
+import orchestrator_api.websocket.ws_handlers
 
 load_dotenv(find_dotenv())
 PORT = os.getenv("ORCHESTRATOR_PORT")
 
 def create_app():
     app = Flask(__name__)
+
 
     @app.before_request
     def start_trace():
