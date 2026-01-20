@@ -1,5 +1,6 @@
 import os
 import re
+import numpy as np
 from typing import List, Tuple, Optional, Set
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
@@ -23,8 +24,8 @@ class RagService:
         os.makedirs(self.persist_dir, exist_ok=True)
 
         self.embeddings = OllamaEmbeddings(model=ollama_embedding_model)
-        
 
+        # Configurazione Splitter ottimizzata per PDF complessi
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
@@ -38,44 +39,94 @@ class RagService:
             persist_directory=self.persist_dir,
         )
 
+        # DEFINIZIONE PROTOTIPI PER INTENT CLASSIFICATION
+        # Frasi campione che rappresentano il "centro" semantico di ogni intento
+        self.intent_prototypes = {
+            "definition": [
+                "cos'è questo concetto", "dammi la definizione", "che cosa significa", 
+                "spiegazione del termine", "in cosa consiste", "puoi spiegarmi cosa è"
+            ],
+            "comparison": [
+                "qual è la differenza tra", "confronta questi due elementi", 
+                "analizza le somiglianze e differenze", "differenze principali", "che differenza c'è"
+            ],
+            "overview": [
+                "fammi un riassunto", "sintetizza il capitolo", "panoramica generale", 
+                "punti principali", "descrivi in breve", "parlami di questo argomento"
+            ]
+            # "general_question" è default, non serve un vettore specifico
+        }
+        
+        # Dizionario per mantenere i vettori in RAM
+        self.intent_vectors = {} 
+        self._precompute_intent_vectors()
+
+    def _precompute_intent_vectors(self):
+        """Genera gli embedding per le frasi campione una sola volta all'avvio."""
+        try:
+            for intent, phrases in self.intent_prototypes.items():
+                vectors = self.embeddings.embed_documents(phrases)
+                self.intent_vectors[intent] = np.array(vectors)
+        except Exception as e:
+            print(f"Warning: Impossibile pre-calcolare vettori intenti: {e}")
+
     @staticmethod
     def _clean_text(text: str) -> str:
         """Pulisce il testo estratto dal PDF dai tipici artefatti di scansione."""
-        # Rimuove i trattini di divisione a fine riga
         text = re.sub(r"(\w)-\s*\n\s*(\w)", r"\1\2", text)
-        
-        # Sostituisce i singoli a capo con uno spazio (mantenendo i doppi a capo per i paragrafi)
         text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
-        
-        # Rimuove spazi multipli e caratteri speciali invisibili
         text = re.sub(r"[ \t]+", " ", text)
         text = re.sub(r"\r", "", text)
-        
         return text.strip()
 
-    @staticmethod
-    def classify_intent(question: str) -> str:
+    def classify_intent(self, question: str) -> str:
+        """Logica Ibrida: Regex -> Vettori -> Fallback."""
         q = (question or "").strip().lower()
-        q = re.sub(r"[’`´]", "'", q)
+        q_clean = re.sub(r"[’`´]", "'", q)
 
-        if re.match(r"^(cos'è|che cos'è|definisci|che significa)", q):
+        # --- REGEX---
+        if re.match(r"^(cos'è|che cos'è|definisci|che significa)", q_clean):
             return "definition"
-
-        if re.match(r"^(perché|perche|come|in che modo|spiega)", q):
-            return "explanation"
-
-        if re.search(r"\b(differenza|confronta|confronto|relazione|rapporto|vs)\b", q):
+        
+        # Regex specifiche per confronto e sintesi
+        if re.search(r"\b(differenza|confronta|confronto|vs)\b", q_clean):
             return "comparison"
-
-        if re.search(r"\b(riassumi|sintesi|panoramica|in generale|principali)\b", q):
+        
+        if re.search(r"\b(riassumi|sintesi|panoramica|parlami)\b", q_clean):
             return "overview"
 
-        return "explanation"
+        # --- ANALISI VETTORIALE---
+        # Se le regex non funzionano, usiamo i vettori per una classificazione più precisa
+        if self.intent_vectors:
+            try:
+                query_vec = np.array(self.embeddings.embed_query(q))
+                best_intent = "general_question"
+                max_score = 0.0
+
+                for intent, prototypes_matrix in self.intent_vectors.items():
+                    # Calcolo similarità coseno
+                    # Confronta la domanda con TUTTE le frasi campione di quell'intento
+                    scores = np.dot(prototypes_matrix, query_vec)
+                    current_max = np.max(scores)
+                    
+                    if current_max > max_score:
+                        max_score = current_max
+                        best_intent = intent
+                
+                
+                # Se la similarità è bassa, significa che la domanda non è chiara.
+                # Torniamo a "general_question" che usa la finestra di contesto (metodo più sicuro).
+                if max_score >= 0.72:
+                    return best_intent
+
+            except Exception:
+                pass # In caso di errore vettoriale, fallback su general_question
+
+        return "general_question"
 
     def build_index(self, pdf_path: str) -> int:
         loader = PyPDFLoader(pdf_path)
         raw_docs = loader.load()
-        
         
         for doc in raw_docs:
             doc.page_content = self._clean_text(doc.page_content)
@@ -105,7 +156,7 @@ class RagService:
 
         return len(chunks)
 
-        def _get_by_chunk_index(self, idx: int) -> Optional[Document]:
+    def _get_by_chunk_index(self, idx: int) -> Optional[Document]:
         try:
             res = self.vdb._collection.get(where={"chunk_index": idx})
         except Exception:
@@ -159,10 +210,10 @@ class RagService:
 
         intent = self.classify_intent(question)
 
-        if intent in ("definition", "explanation"):
+        if intent in ("definition", "general_question"):
             search_type = "similarity"
             k_eff = max(4, k)
-            do_window = intent == "explanation"
+            do_window = intent == "general_question"
         else:
             search_type = "mmr"
             k_eff = max(8, k)
