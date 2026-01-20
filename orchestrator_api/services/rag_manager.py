@@ -1,12 +1,12 @@
 import os
 import threading
+from typing import Tuple, List, Optional
 import structlog
-from typing import Optional, Tuple, List
-
 from config.pdf_map import PDF_MAP
 from services.rag_service import RagService
 
 log = structlog.get_logger()
+
 
 class RagManager:
     def __init__(self, persist_root: str, embedding_model: str = "nomic-embed-text"):
@@ -14,12 +14,12 @@ class RagManager:
         self.embedding_model = embedding_model
 
         self._lock = threading.Lock()
-        self._services = {}  # pdf_name -> RagService
-        self._status = {k: "missing" for k in PDF_MAP.keys()}  # missing|building|ready|error
-        self._error = {k: None for k in PDF_MAP.keys()}
+        self._services = {}
+        self._status = {k: "missing" for k in PDF_MAP}
+        self._error = {k: None for k in PDF_MAP}
 
     def get_status(self, pdf_name: str) -> Tuple[str, Optional[str]]:
-        return self._status.get(pdf_name, "error"), self._error.get(pdf_name, "unknown_pdf")
+        return self._status.get(pdf_name, "error"), self._error.get(pdf_name)
 
     def _make_service(self, pdf_name: str) -> RagService:
         collection = f"pdf_knowledge_{pdf_name}"
@@ -37,10 +37,9 @@ class RagManager:
             return False, "unknown_pdf"
 
         with self._lock:
-            st = self._status[pdf_name]
-            if st == "ready":
+            if self._status[pdf_name] == "ready":
                 return True, "ready"
-            if st == "building":
+            if self._status[pdf_name] == "building":
                 return False, "building"
             self._status[pdf_name] = "building"
             self._error[pdf_name] = None
@@ -59,19 +58,19 @@ class RagManager:
             with self._lock:
                 self._services[pdf_name] = svc
                 self._status[pdf_name] = "ready"
-                self._error[pdf_name] = None
 
-            log.info("rag_index_built", pdf_name=pdf_name, chunks=n_chunks, pdf_path=pdf_path)
+            log.info("rag_index_built", pdf=pdf_name, chunks=n_chunks)
             return True, "ready"
+
         except Exception as e:
             with self._lock:
                 self._status[pdf_name] = "error"
                 self._error[pdf_name] = str(e)
-            log.exception("rag_index_failed", pdf_name=pdf_name)
+            log.exception("rag_index_failed", pdf=pdf_name)
             return False, "error"
 
     def retrieve_context(self, pdf_name: str, question: str, k: int = 5) -> Tuple[str, List[dict]]:
         svc = self._services.get(pdf_name)
-        if svc is None:
+        if not svc:
             return "", []
-        return svc.retrieve_context(question, k=k, use_mmr=True)
+        return svc.retrieve_context(question, k=k)
