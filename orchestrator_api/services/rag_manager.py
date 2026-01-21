@@ -7,7 +7,6 @@ from services.rag_service import RagService
 
 log = structlog.get_logger()
 
-
 class RagManager:
     def __init__(self, persist_root: str, embedding_model: str = "nomic-embed-text"):
         self.persist_root = persist_root
