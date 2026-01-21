@@ -125,36 +125,47 @@ class RagService:
         return "general_question"
 
     def build_index(self, pdf_path: str) -> int:
-        loader = PyPDFLoader(pdf_path)
-        raw_docs = loader.load()
+            try:
+                existing_count = self.vdb._collection.count()
+                if existing_count > 0:
+                    print(f"[RAG] Index già esistente ({existing_count} chunks). Salto il rebuild per: {pdf_path}")
+                    return existing_count
+            except Exception as e:
+                print(f"[RAG] Errore verifica index esistente: {e}, rebuild.")
+
         
-        for doc in raw_docs:
-            doc.page_content = self._clean_text(doc.page_content)
+            loader = PyPDFLoader(pdf_path)
+            raw_docs = loader.load()
             
-        chunks = self.splitter.split_documents(raw_docs)
+            for doc in raw_docs:
+                doc.page_content = self._clean_text(doc.page_content)
+                
+            chunks = self.splitter.split_documents(raw_docs)
 
-        for i, c in enumerate(chunks):
-            c.metadata = c.metadata or {}
-            c.metadata["chunk_index"] = i
-            if "page" in c.metadata:
-                try:
-                    c.metadata["page"] = int(c.metadata["page"])
-                except Exception:
-                    pass
+            for i, c in enumerate(chunks):
+                c.metadata = c.metadata or {}
+                c.metadata["chunk_index"] = i
+                if "page" in c.metadata:
+                    try:
+                        c.metadata["page"] = int(c.metadata["page"])
+                    except Exception:
+                        pass
 
-        try:
-            self.vdb.delete_collection()
-        except Exception:
-            pass
 
-        self.vdb = Chroma(
-            collection_name=self.collection_name,
-            embedding_function=self.embeddings,
-            persist_directory=self.persist_dir,
-        )
-        self.vdb.add_documents(chunks)
+            try:
+                self.vdb.delete_collection()
+            except Exception:
+                pass
 
-        return len(chunks)
+
+            self.vdb = Chroma(
+                collection_name=self.collection_name,
+                embedding_function=self.embeddings,
+                persist_directory=self.persist_dir,
+            )
+            self.vdb.add_documents(chunks)
+
+            return len(chunks)
 
     def _get_by_chunk_index(self, idx: int) -> Optional[Document]:
         try:
@@ -202,66 +213,69 @@ class RagService:
         return sorted(docs, key=key)
 
     def retrieve_context(
-        self,
-        question: str,
-        k: int = 5,
-        fetch_k: int = 20,
-    ) -> Tuple[str, List[dict]]:
+            self,
+            question: str,
+            k: int = 5,
+            fetch_k: int = 20,
+        ) -> Tuple[str, List[dict]]:
 
-        intent = self.classify_intent(question)
+            intent = self.classify_intent(question)
 
-        if intent in ("definition", "general_question"):
-            search_type = "similarity"
-            k_eff = max(4, k)
-            do_window = intent == "general_question"
-        else:
-            search_type = "mmr"
-            k_eff = max(8, k)
-            do_window = False
+            # --- MODIFICA 2: Print dell'intent ---
+            print(f"\n🧠 [INTENT DETECTED] Question: '{question}' -> Intent: '{intent}'\n")
 
-        if search_type == "mmr":
-            retriever = self.vdb.as_retriever(
-                search_type="mmr",
-                search_kwargs={"k": k_eff, "fetch_k": max(fetch_k, 40)},
+            if intent in ("definition", "general_question"):
+                search_type = "similarity"
+                k_eff = max(4, k)
+                do_window = intent == "general_question"
+            else:
+                search_type = "mmr"
+                k_eff = max(8, k)
+                do_window = False
+
+            if search_type == "mmr":
+                retriever = self.vdb.as_retriever(
+                    search_type="mmr",
+                    search_kwargs={"k": k_eff, "fetch_k": max(fetch_k, 40)},
+                )
+            else:
+                retriever = self.vdb.as_retriever(
+                    search_type="similarity",
+                    search_kwargs={"k": k_eff},
+                )
+
+            docs = retriever.invoke(question)
+            if not docs:
+                return "", []
+
+            if do_window:
+                expanded = list(docs)
+                for d in docs:
+                    ci = d.metadata.get("chunk_index")
+                    if ci is None:
+                        continue
+                    for ni in (ci - 1, ci + 1):
+                        if ni >= 0:
+                            nd = self._get_by_chunk_index(ni)
+                            if nd:
+                                expanded.append(nd)
+                docs = expanded
+
+            docs = self._dedupe(docs)
+            docs = self._sort(docs)
+
+            context = "\n\n---\n\n".join(
+                f"[p.{d.metadata.get('page', '?')}] {d.page_content}"
+                for d in docs
             )
-        else:
-            retriever = self.vdb.as_retriever(
-                search_type="similarity",
-                search_kwargs={"k": k_eff},
-            )
 
-        docs = retriever.invoke(question)
-        if not docs:
-            return "", []
+            sources = [
+                {
+                    "page": d.metadata.get("page"),
+                    "source": d.metadata.get("source"),
+                    "chunk_index": d.metadata.get("chunk_index"),
+                }
+                for d in docs
+            ]
 
-        if do_window:
-            expanded = list(docs)
-            for d in docs:
-                ci = d.metadata.get("chunk_index")
-                if ci is None:
-                    continue
-                for ni in (ci - 1, ci + 1):
-                    if ni >= 0:
-                        nd = self._get_by_chunk_index(ni)
-                        if nd:
-                            expanded.append(nd)
-            docs = expanded
-
-        docs = self._dedupe(docs)
-        docs = self._sort(docs)
-
-        context = "\n\n---\n\n".join(
-            f"[p.{d.metadata.get('page', '?')}] {d.page_content}"
-            for d in docs
-        )
-
-        sources = [
-            {
-                "page": d.metadata.get("page"),
-                "source": d.metadata.get("source"),
-                "chunk_index": d.metadata.get("chunk_index"),
-            }
-            for d in docs
-        ]
-
-        return context, sources
+            return context, sources

@@ -70,67 +70,66 @@ def stream_text_answer_by_sentence(question: str, pdf_name: str | None):
     is_summary_mode = False
     found_title = False
 
+
     for chunk in question_answerer_model.stream(prompt):
-        for block in chunk.content_blocks:
-            if block["type"] == "reasoning":
-                continue
+        # ChatOllama restituisce il testo direttamente in chunk.content
+        text_chunk = chunk.content
+        
+        if text_chunk:
+            buffer += text_chunk
 
-            if block["type"] == "text":
-                text = block.get("text", "")
-                buffer += text
-
-                # --- MODE 1: SPEECH ---
-                if not is_summary_mode:
-                    if SEPARATOR in buffer:
-                        # 1. Split speech from summary
-                        speech_part, summary_part = buffer.split(SEPARATOR, 1)
-                        
-                        # Flush speech sentences
-                        if speech_part.strip():
-                            sentences = re.split(r'([.!?])', speech_part)
-                            for i in range(0, len(sentences) - 1, 2):
-                                sentence = sentences[i].strip() + sentences[i+1].strip()
-                                if sentence:
-                                    yield (sentence, "speech")
-                            
-                            # Flush tail of speech
-                            if len(sentences) % 2 == 1 and sentences[-1].strip():
-                                yield (sentences[-1].strip(), "speech")
-
-                        # Switch to Summary Mode
-                        is_summary_mode = True
-                        buffer = summary_part 
-                    else:
-                        # Standard Speech buffering logic
-                        sentences = re.split(r'([.!?])', buffer)
-                        for i in range(0, len(sentences) - 1, 2):
-                            s = sentences[i].strip() + sentences[i+1].strip()
-                            if s: yield (s, "speech")
-                        buffer = sentences[-1] if len(sentences) % 2 == 1 else ""
-
-                # --- MODE 2: SUMMARY (Title + Bullets) ---
-                if is_summary_mode:
-                    # Split by newlines to process line-by-line
-                    lines = buffer.split('\n')
-
-                    # Process all fully formed lines (leave the last one in buffer)
-                    for i in range(len(lines) - 1):
-                        line = lines[i].strip()
-                        if not line: 
-                            continue # Skip empty lines
-
-                        if not found_title:
-                            # The first non-empty line after ##### is the Title
-                            yield (line, "title")
-                            found_title = True
-                        else:
-                            # Subsequent lines are bullets
-                            # Remove the '*' if present
-                            clean_line = line.lstrip("*").strip()
-                            yield (clean_line, "bullet")
+            # --- MODE 1: SPEECH ---
+            if not is_summary_mode:
+                if SEPARATOR in buffer:
+                    # 1. Split speech from summary
+                    speech_part, summary_part = buffer.split(SEPARATOR, 1)
                     
-                    # Keep the last incomplete line in buffer
-                    buffer = lines[-1]
+                    # Flush speech sentences
+                    if speech_part.strip():
+                        sentences = re.split(r'([.!?])', speech_part)
+                        for i in range(0, len(sentences) - 1, 2):
+                            sentence = sentences[i].strip() + sentences[i+1].strip()
+                            if sentence:
+                                yield (sentence, "speech")
+                        
+                        # Flush tail of speech
+                        if len(sentences) % 2 == 1 and sentences[-1].strip():
+                            yield (sentences[-1].strip(), "speech")
+
+                    # Switch to Summary Mode
+                    is_summary_mode = True
+                    buffer = summary_part 
+                else:
+                    # Standard Speech buffering logic
+                    sentences = re.split(r'([.!?])', buffer)
+                    for i in range(0, len(sentences) - 1, 2):
+                        s = sentences[i].strip() + sentences[i+1].strip()
+                        if s: yield (s, "speech")
+                    buffer = sentences[-1] if len(sentences) % 2 == 1 else ""
+
+            # --- MODE 2: SUMMARY (Title + Bullets) ---
+            if is_summary_mode:
+                # Split by newlines to process line-by-line
+                lines = buffer.split('\n')
+
+                # Process all fully formed lines (leave the last one in buffer)
+                for i in range(len(lines) - 1):
+                    line = lines[i].strip()
+                    if not line: 
+                        continue # Skip empty lines
+
+                    if not found_title:
+                        # The first non-empty line after ##### is the Title
+                        yield (line, "title")
+                        found_title = True
+                    else:
+                        # Subsequent lines are bullets
+                        # Remove the '*' if present
+                        clean_line = line.lstrip("*").strip()
+                        yield (clean_line, "bullet")
+                
+                # Keep the last incomplete line in buffer
+                buffer = lines[-1]
 
     # --- FINAL FLUSH ---
     if buffer.strip():
