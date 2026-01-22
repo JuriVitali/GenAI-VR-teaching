@@ -15,9 +15,7 @@ import tempfile
 import re
 from shared.utils import log_event
 from services.rag_singleton import rag_manager
-
-
-
+from services.memory_service import get_chat_history, update_chat_history
 
 # Load environment variables
 load_dotenv(find_dotenv())
@@ -50,7 +48,7 @@ def transcribe_audio(audio_path):
 
 
 @log_event("text_answer_generation")
-def stream_text_answer_by_sentence(question: str, pdf_name: str | None):
+def stream_text_answer_by_sentence(question: str, pdf_name: str | None, session_id: str):
     structlog.contextvars.bind_contextvars(question=question)
 
     context, sources = "", []
@@ -64,78 +62,102 @@ def stream_text_answer_by_sentence(question: str, pdf_name: str | None):
 
     prompt = tutor_config["prompt"].format(question=question, context=context)
 
+    # Construct the Message List
+    system_text = tutor_config["prompt"].format(context=context)
+    
+    messages = [
+        SystemMessage(content=system_text),
+    ]
+    
+    # Inject History
+    messages.extend(get_chat_history(session_id))
+    
+    # Add Current Question
+    messages.append(HumanMessage(content=question))
+
     buffer = ""
+    full_answer_accumulator = ""
     
     # State flags
     is_summary_mode = False
     found_title = False
 
-    for chunk in question_answerer_model.stream(prompt):
-        for block in chunk.content_blocks:
-            if block["type"] == "reasoning":
-                continue
+    for chunk in question_answerer_model.stream(messages):
+        
+        text_chunk = chunk.content
+        
+        # Check for opening tag
+        if "<think>" in text_chunk:
+            inside_think_tag = True
+            text_chunk = text_chunk.replace("<think>", "")
+        
+        # Check for closing tag
+        if "</think>" in text_chunk:
+            inside_think_tag = False
+            # Split to keep the part after the tag
+            parts = text_chunk.split("</think>")
+            text_chunk = parts[1] if len(parts) > 1 else ""
 
-            if block["type"] == "text":
-                text = block.get("text", "")
-                buffer += text
+        # If we are strictly inside the thinking block, skip this chunk
+        if inside_think_tag:
+            continue
+            
+        # If the chunk is empty after filtering, skip
+        if not text_chunk:
+            continue
 
-                # --- MODE 1: SPEECH ---
-                if not is_summary_mode:
-                    if SEPARATOR in buffer:
-                        # 1. Split speech from summary
-                        speech_part, summary_part = buffer.split(SEPARATOR, 1)
-                        
-                        # Flush speech sentences
-                        if speech_part.strip():
-                            sentences = re.split(r'([.!?])', speech_part)
-                            for i in range(0, len(sentences) - 1, 2):
-                                sentence = sentences[i].strip() + sentences[i+1].strip()
-                                if sentence:
-                                    yield (sentence, "speech")
-                            
-                            # Flush tail of speech
-                            if len(sentences) % 2 == 1 and sentences[-1].strip():
-                                yield (sentences[-1].strip(), "speech")
+        # --- EXISTING LOGIC STARTS HERE ---
+        buffer += text_chunk
+        full_answer_accumulator += text_chunk
 
-                        # Switch to Summary Mode
-                        is_summary_mode = True
-                        buffer = summary_part 
-                    else:
-                        # Standard Speech buffering logic
-                        sentences = re.split(r'([.!?])', buffer)
-                        for i in range(0, len(sentences) - 1, 2):
-                            s = sentences[i].strip() + sentences[i+1].strip()
-                            if s: yield (s, "speech")
-                        buffer = sentences[-1] if len(sentences) % 2 == 1 else ""
-
-                # --- MODE 2: SUMMARY (Title + Bullets) ---
-                if is_summary_mode:
-                    # Split by newlines to process line-by-line
-                    lines = buffer.split('\n')
-
-                    # Process all fully formed lines (leave the last one in buffer)
-                    for i in range(len(lines) - 1):
-                        line = lines[i].strip()
-                        if not line: 
-                            continue # Skip empty lines
-
-                        if not found_title:
-                            # The first non-empty line after ##### is the Title
-                            yield (line, "title")
-                            found_title = True
-                        else:
-                            # Subsequent lines are bullets
-                            # Remove the '*' if present
-                            clean_line = line.lstrip("*").strip()
-                            yield (clean_line, "bullet")
+        # --- MODE 1: SPEECH ---
+        if not is_summary_mode:
+            if SEPARATOR in buffer:
+                # 1. Split speech from summary
+                speech_part, summary_part = buffer.split(SEPARATOR, 1)
+                
+                # Flush speech sentences
+                if speech_part.strip():
+                    sentences = re.split(r'([.!?])', speech_part)
+                    for i in range(0, len(sentences) - 1, 2):
+                        sentence = sentences[i].strip() + sentences[i+1].strip()
+                        if sentence:
+                            yield (sentence, "speech")
                     
-                    # Keep the last incomplete line in buffer
-                    buffer = lines[-1]
+                    # Flush tail of speech
+                    if len(sentences) % 2 == 1 and sentences[-1].strip():
+                        yield (sentences[-1].strip(), "speech")
+                
+                # Switch to Summary Mode
+                is_summary_mode = True
+                buffer = summary_part 
+            else:
+                # Standard Speech buffering logic
+                sentences = re.split(r'([.!?])', buffer)
+                for i in range(0, len(sentences) - 1, 2):
+                    s = sentences[i].strip() + sentences[i+1].strip()
+                    if s: yield (s, "speech")
+                buffer = sentences[-1] if len(sentences) % 2 == 1 else ""
+
+        # --- MODE 2: SUMMARY (Title + Bullets) ---
+        if is_summary_mode:
+            lines = buffer.split('\n')
+            for i in range(len(lines) - 1):
+                line = lines[i].strip()
+                if not line: continue 
+
+                if not found_title:
+                    yield (line, "title")
+                    found_title = True
+                else:
+                    clean_line = line.lstrip("*").strip()
+                    yield (clean_line, "bullet")
+            
+            buffer = lines[-1]
 
     # --- FINAL FLUSH ---
     if buffer.strip():
         if is_summary_mode:
-            # Handle the very last line
             line = buffer.strip()
             if not found_title:
                 yield (line, "title")
@@ -144,6 +166,9 @@ def stream_text_answer_by_sentence(question: str, pdf_name: str | None):
                 yield (clean_line, "bullet")
         else:
             yield (buffer.strip(), "speech")
+
+    # Save to Memory
+    update_chat_history(session_id, question, full_answer_accumulator)
 
 @log_event("audio_generation")
 def synthesize_wav(sentence, language=xtts_config["default_language"]):

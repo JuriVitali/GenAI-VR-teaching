@@ -1,6 +1,6 @@
 import os
 
-PDF_DIR = os.getenv("PDF_DIR", "/home/vrai/Leo/GenAI-VR-teaching/pdfs")
+PDF_DIR = os.getenv("PDF_DIR")
 
 PDF_MAP = {
     "pdf1": os.path.join(PDF_DIR, "pdf1.pdf"),
