@@ -8,9 +8,9 @@ import logging
 from dotenv import load_dotenv, find_dotenv
 from flask import Flask, request
 
+load_dotenv(find_dotenv())
 
-
-root_dir = "/home/vrai/Copy"
+root_dir = os.getenv("ROOT_DIR")
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
@@ -22,7 +22,6 @@ from orchestrator_api.controllers.controller import chat_bp
 from orchestrator_api.websocket.socketio_instance import socketio
 import orchestrator_api.websocket.ws_handlers
 
-load_dotenv(find_dotenv())
 PORT = os.getenv("ORCHESTRATOR_PORT")
 
 def create_app():
