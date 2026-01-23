@@ -16,6 +16,7 @@ import re
 from shared.utils import log_event
 from services.rag_singleton import rag_manager
 from services.memory_service import get_chat_history, update_chat_history
+from langchain_core.messages import HumanMessage, SystemMessage
 
 # Load environment variables
 load_dotenv(find_dotenv())
@@ -75,35 +76,33 @@ def stream_text_answer_by_sentence(question: str, pdf_name: str | None, session_
     # Add Current Question
     messages.append(HumanMessage(content=question))
 
+    print(messages)
+
     buffer = ""
     full_answer_accumulator = ""
     
     # State flags
     is_summary_mode = False
     found_title = False
+    inside_think_tag = False 
 
+    # Now start the stream
     for chunk in question_answerer_model.stream(messages):
-        
         text_chunk = chunk.content
         
-        # Check for opening tag
+        # 1. Handle Thinking Tags (DeepSeek R1 Specific)
         if "<think>" in text_chunk:
             inside_think_tag = True
+            # Remove the tag from the text we process
             text_chunk = text_chunk.replace("<think>", "")
         
-        # Check for closing tag
         if "</think>" in text_chunk:
             inside_think_tag = False
-            # Split to keep the part after the tag
+            # Keep only what comes after the closing tag
             parts = text_chunk.split("</think>")
             text_chunk = parts[1] if len(parts) > 1 else ""
 
-        # If we are strictly inside the thinking block, skip this chunk
-        if inside_think_tag:
-            continue
-            
-        # If the chunk is empty after filtering, skip
-        if not text_chunk:
+        if inside_think_tag or not text_chunk:
             continue
 
         # --- EXISTING LOGIC STARTS HERE ---

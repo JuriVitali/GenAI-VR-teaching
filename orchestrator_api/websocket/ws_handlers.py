@@ -150,7 +150,7 @@ def handle_ask(data):
 
             # Logging
             answer_text = " ".join(full_answer)
-            logger.info(f"Tutor response: {answer_text}")
+            logger.info(f"tutor_answer", full_text_answer=answer_text)
             emit("text_done", {"status": "completed"})
 
         finally:
@@ -195,6 +195,7 @@ def handle_ask(data):
             )
 
     except Exception as e:
+        logger.error("error", error=str(e))
         emit("error", {"message": str(e)})
 
 # Generate 3D models and send their filenames to the client
