@@ -8,11 +8,11 @@ import logging
 from dotenv import load_dotenv, find_dotenv
 from flask import Flask, request
 
+load_dotenv(find_dotenv())
 
-
-root_dir = "/home/vrai/Copy"
-if root_dir not in sys.path:
-    sys.path.insert(0, root_dir)
+ROOT_DIR = os.getenv("ROOT_DIR")
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
 from shared.logger import setup_logging
 

@@ -7,9 +7,11 @@ from flask import Flask, request
 from flask_cors import CORS
 from dotenv import load_dotenv, find_dotenv
 
-root_dir = "/home/vrai/Copy"
-if root_dir not in sys.path:
-    sys.path.insert(0, root_dir)
+load_dotenv(find_dotenv())
+
+ROOT_DIR = os.getenv("ROOT_DIR")
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
 from shared.logger import setup_logging
 
