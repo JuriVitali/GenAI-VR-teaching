@@ -139,6 +139,29 @@ def handle_ask(data):
                     summary_bullets.append(text_content)
                 
                 socketio.sleep(0)
+            
+                ans_lower = answer_text.lower()
+                # Frasi tipiche che indicano che il RAG ha fallito o non sa la risposta
+                negative_triggers = [
+                        "mi dispiace", 
+                        "non ho trovato", 
+                        "non è possibile trovare", 
+                        "non dispongo di informazioni",
+                        "i cannot find the answer",
+                        "non c'è risposta",
+                        "non sono in grado di",
+                        "non so la risposta",
+                        "non posso rispondere",
+                        "non ho informazioni",
+                        "non ho dati",
+                        "non riesco a trovare"
+                    ]
+                is_negative_answer = any(trigger in ans_lower for trigger in negative_triggers)
+                    
+                if is_negative_answer:
+                    logger.info("[SKIP] Object generation skipped because answer was negative.")
+                    socketio.emit("objects_done", {"status": "skipped"}, to=sid)
+                    return
 
             # Stream Finished: Emit the Whole Summary Event
             # We only emit this once, containing the full structure
@@ -156,7 +179,7 @@ def handle_ask(data):
         finally:
             # Clean up: Tell the worker to stop after the queue is empty
             audio_queue.put(None) 
-
+        
         obj_extracted, summary_img_extracted = extract_prompts(transcription, answer_text)
 
         # Retrieve the current rid from the context

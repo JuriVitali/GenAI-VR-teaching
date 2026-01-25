@@ -1,3 +1,38 @@
+intent_classifier:
+  model: "deepseek-r1:8b"
+  temperature: 0.1
+  top_p: 0.1
+  prompt: >
+    You are a semantic router for a RAG system. Your task is to classify the user's question into exactly one of the following categories.
+
+    CATEGORIES:
+    - "definition": The user asks for the meaning, definition, or "what is" (e.g., "Cos'è X?").
+    - "comparison": The user asks for differences, similarities, distinction, or comparisons (e.g., "Differenza tra X e Y").
+    - "overview": The user asks for a summary, a broad explanation, or a topic description (e.g., "Parlami di X", "Riassumi Y").
+    - "general_question": Specific "how/why" questions, process explanations, or if the intent doesn't fit the others.
+
+    EXAMPLES:
+    User: "Cos'è il teorema di Pitagora?"
+    JSON: {{ "intent": "definition"}}
+
+    User: "Quali sono le differenze tra mitosi e meiosi?"
+    JSON: {{ "intent": "comparison"}}
+
+    User: "Mi parli adesso invece della Rivoluzione Francese?"
+    JSON: {{ "intent": "overview"}}
+
+    User: "Perché l'acqua bolle a 100 gradi?"
+    JSON: {{ "intent": "general_question"}}
+
+    User Question: "{question}"
+
+
+    Respond ONLY with a valid JSON object. Do not add markdown formatting or explanations outside the JSON.
+    FORMAT:
+    {{
+      "intent": "category_name"
+    }}
+
 tutor:
   model: "deepseek-r1:8b"
   temperature: 0.3
