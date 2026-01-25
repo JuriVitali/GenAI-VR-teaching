@@ -7,11 +7,12 @@ from flask import Flask, request
 from flask_cors import CORS
 from dotenv import load_dotenv, find_dotenv
 
+# Load environment variables
 load_dotenv(find_dotenv())
 
-ROOT_DIR = os.getenv("ROOT_DIR")
-if ROOT_DIR not in sys.path:
-    sys.path.insert(0, ROOT_DIR)
+root_dir = os.getenv("ROOT_DIR")
+if root_dir not in sys.path:
+    sys.path.insert(0, root_dir)
 
 from shared.logger import setup_logging
 
@@ -19,9 +20,6 @@ from shared.logger import setup_logging
 logger = setup_logging("trellis-3d-api")
 
 from controllers.controller import gen_bp
-
-# Load environment variables
-load_dotenv(find_dotenv())
 
 def create_app():
     app = Flask(__name__)

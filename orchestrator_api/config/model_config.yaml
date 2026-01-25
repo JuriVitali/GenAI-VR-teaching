@@ -57,8 +57,6 @@ tutor:
       Then, provide a concise summary formed by:
       - a title of the explanation, preceded by exactly the string "#####".
       - three or four bullet points that summarize the explanation, using the * symbol to indicate bullet points.
-
-      User question: {question}
   
 xtts:
   model: "tts_models/multilingual/multi-dataset/xtts_v2"
