@@ -166,7 +166,7 @@ def handle_ask(data):
                     summary_bullets.append(text_content)
 
                 socketio.sleep(0)
-            
+                answer_text = " ".join(full_answer)
                 ans_lower = answer_text.lower()
                 # Frasi tipiche che indicano che il RAG ha fallito o non sa la risposta
                 negative_triggers = [
@@ -193,8 +193,8 @@ def handle_ask(data):
             if summary_title or summary_bullets:
                 emit("summary", {"title": summary_title, "body": summary_bullets})
 
-            answer_text = " ".join(full_answer)
-            logger.info(f"tutor_answer", text_answer=answer_text)
+            # Logging
+            logger.info(f"tutor_answer", full_text_answer=answer_text)
             emit("text_done", {"status": "completed"})
 
         finally:
