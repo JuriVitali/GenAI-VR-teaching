@@ -80,104 +80,6 @@ def stream_text_answer_by_sentence(question: str, pdf_name: str | None, session_
     print(messages)
 
     buffer = ""
-<<<<<<< HEAD
-    is_summary_mode = False
-    found_title = False
-    
-    # Flag per gestire il DeepSeek Thinking
-    inside_think_tag = False 
-    chunks_received = 0
-
-    try:
-        for chunk in question_answerer_model.stream(prompt):
-            text_chunk = chunk.content
-            
-            if not text_chunk:
-                continue
-
-            chunks_received += 1
-            # --- GESTIONE DEEPSEEK THINKING (<think>...</think>) ---
-            
-            if inside_think_tag:
-                if "</think>" in text_chunk:
-                    parts = text_chunk.split("</think>", 1)
-                    inside_think_tag = False
-                    text_chunk = parts[1]
-                else:
-                    continue
-            
-            
-            if "<think>" in text_chunk:
-                parts = text_chunk.split("<think>", 1)
-                pre_think = parts[0] 
-                
-                
-                rest = parts[1]
-                if "</think>" in rest:
-                    after_think_parts = rest.split("</think>", 1)
-                    text_chunk = pre_think + after_think_parts[1]
-                else:
-                    inside_think_tag = True
-                    text_chunk = pre_think
-
-            if not text_chunk:
-                continue
-
-
-            buffer += text_chunk
-
-            # --- MODE 1: SPEECH ---
-            if not is_summary_mode:
-                if SEPARATOR in buffer:
-                    speech_part, summary_part = buffer.split(SEPARATOR, 1)
-                    
-                    if speech_part.strip():
-                        sentences = re.split(r'([.!?])', speech_part)
-                        for i in range(0, len(sentences) - 1, 2):
-                            sentence = sentences[i].strip() + sentences[i+1].strip()
-                            if sentence:
-                                print(f"[DEBUG] Yielding speech: {sentence[:30]}...")
-                                yield (sentence, "speech")
-                        
-                        if len(sentences) % 2 == 1 and sentences[-1].strip():
-                            yield (sentences[-1].strip(), "speech")
-
-                    is_summary_mode = True
-                    buffer = summary_part 
-                else:
-                    sentences = re.split(r'([.!?])', buffer)
-                    for i in range(0, len(sentences) - 1, 2):
-                        s = sentences[i].strip() + sentences[i+1].strip()
-                        if s: 
-                            print(f"[DEBUG] Yielding speech: {s[:30]}...")
-                            yield (s, "speech")
-                    buffer = sentences[-1] if len(sentences) % 2 == 1 else ""
-
-            # --- MODE 2: SUMMARY ---
-            if is_summary_mode:
-                lines = buffer.split('\n')
-                for i in range(len(lines) - 1):
-                    line = lines[i].strip()
-                    if not line: continue 
-
-                    if not found_title:
-                        yield (line, "title")
-                        found_title = True
-                    else:
-                        clean_line = line.lstrip("*").strip()
-                        yield (clean_line, "bullet")
-                buffer = lines[-1]
-
-        # --- FINAL FLUSH ---
-        if buffer.strip() and not inside_think_tag:
-            if is_summary_mode:
-                line = buffer.strip()
-                if not found_title:
-                    yield (line, "title")
-                else:
-                    clean_line = line.lstrip("*").strip()
-                    yield (clean_line, "bullet")
-=======
     full_answer_accumulator = ""
     
     # State flags
@@ -259,7 +161,6 @@ def stream_text_answer_by_sentence(question: str, pdf_name: str | None, session_
             line = buffer.strip()
             if not found_title:
                 yield (line, "title")
->>>>>>> origin/main
             else:
                 yield (buffer.strip(), "speech")
         
