@@ -86,11 +86,12 @@ def stream_text_answer_by_sentence(question: str, pdf_name: str | None, session_
     is_summary_mode = False
     found_title = False
     inside_think_tag = False 
+    chunks_received = 0
 
     # Now start the stream
     for chunk in question_answerer_model.stream(messages):
         text_chunk = chunk.content
-        
+        chunks_received += 1
         # 1. Handle Thinking Tags (DeepSeek R1 Specific)
         if "<think>" in text_chunk:
             inside_think_tag = True
@@ -171,9 +172,6 @@ def stream_text_answer_by_sentence(question: str, pdf_name: str | None, session_
         elif not buffer.strip() and chunks_received > 0:
              print("[DEBUG] Chunks received but buffer empty (maybe only thinking?)")
                 
-    except Exception as e:
-        logger.error(f"LLM Stream Error: {e}")
-        yield ("Mi dispiace, ho avuto un problema tecnico e non riesco a formulare una risposta.", "speech")
 
 
     # Save to Memory
