@@ -12,9 +12,9 @@ from dotenv import load_dotenv, find_dotenv
 # Load environment variables
 load_dotenv(find_dotenv())
 
-ROOT_DIR = os.getenv("ROOT_DIR")
-if ROOT_DIR not in sys.path:
-    sys.path.insert(0, ROOT_DIR)
+root_dir = os.getenv("ROOT_DIR")
+if root_dir not in sys.path:
+    sys.path.insert(0, root_dir)
 
 from shared.logger import setup_logging
 
