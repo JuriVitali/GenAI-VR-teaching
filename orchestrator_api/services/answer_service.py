@@ -80,6 +80,7 @@ def stream_text_answer_by_sentence(question: str, pdf_name: str | None, session_
     print(messages)
 
     buffer = ""
+<<<<<<< HEAD
     is_summary_mode = False
     found_title = False
     
@@ -176,6 +177,89 @@ def stream_text_answer_by_sentence(question: str, pdf_name: str | None, session_
                 else:
                     clean_line = line.lstrip("*").strip()
                     yield (clean_line, "bullet")
+=======
+    full_answer_accumulator = ""
+    
+    # State flags
+    is_summary_mode = False
+    found_title = False
+    inside_think_tag = False 
+
+    # Now start the stream
+    for chunk in question_answerer_model.stream(messages):
+        text_chunk = chunk.content
+        
+        # 1. Handle Thinking Tags (DeepSeek R1 Specific)
+        if "<think>" in text_chunk:
+            inside_think_tag = True
+            # Remove the tag from the text we process
+            text_chunk = text_chunk.replace("<think>", "")
+        
+        if "</think>" in text_chunk:
+            inside_think_tag = False
+            # Keep only what comes after the closing tag
+            parts = text_chunk.split("</think>")
+            text_chunk = parts[1] if len(parts) > 1 else ""
+
+        if inside_think_tag or not text_chunk:
+            continue
+
+        # --- EXISTING LOGIC STARTS HERE ---
+        buffer += text_chunk
+        full_answer_accumulator += text_chunk
+
+        # --- MODE 1: SPEECH ---
+        if not is_summary_mode:
+            if SEPARATOR in buffer:
+                # 1. Split speech from summary
+                speech_part, summary_part = buffer.split(SEPARATOR, 1)
+                
+                # Flush speech sentences
+                if speech_part.strip():
+                    sentences = re.split(r'([.!?])', speech_part)
+                    for i in range(0, len(sentences) - 1, 2):
+                        sentence = sentences[i].strip() + sentences[i+1].strip()
+                        if sentence:
+                            yield (sentence, "speech")
+                    
+                    # Flush tail of speech
+                    if len(sentences) % 2 == 1 and sentences[-1].strip():
+                        yield (sentences[-1].strip(), "speech")
+                
+                # Switch to Summary Mode
+                is_summary_mode = True
+                buffer = summary_part 
+            else:
+                # Standard Speech buffering logic
+                sentences = re.split(r'([.!?])', buffer)
+                for i in range(0, len(sentences) - 1, 2):
+                    s = sentences[i].strip() + sentences[i+1].strip()
+                    if s: yield (s, "speech")
+                buffer = sentences[-1] if len(sentences) % 2 == 1 else ""
+
+        # --- MODE 2: SUMMARY (Title + Bullets) ---
+        if is_summary_mode:
+            lines = buffer.split('\n')
+            for i in range(len(lines) - 1):
+                line = lines[i].strip()
+                if not line: continue 
+
+                if not found_title:
+                    yield (line, "title")
+                    found_title = True
+                else:
+                    clean_line = line.lstrip("*").strip()
+                    yield (clean_line, "bullet")
+            
+            buffer = lines[-1]
+
+    # --- FINAL FLUSH ---
+    if buffer.strip():
+        if is_summary_mode:
+            line = buffer.strip()
+            if not found_title:
+                yield (line, "title")
+>>>>>>> origin/main
             else:
                 yield (buffer.strip(), "speech")
         
