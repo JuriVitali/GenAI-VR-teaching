@@ -1,3 +1,4 @@
+# ws_handlers.py
 from flask_socketio import SocketIO, emit
 from flask import request
 from eventlet import tpool
@@ -6,6 +7,7 @@ import tempfile
 import os
 import base64
 import uuid
+from services.frontend_log_service import save_log_batch
 from app import socketio
 from services.answer_service import (
     stream_text_answer_by_sentence,
@@ -16,6 +18,19 @@ import structlog
 from dotenv import load_dotenv, find_dotenv
 from services.object_extraction_service import extract_prompts
 from queue import Queue
+from pathlib import Path
+from shared.log_merger import merge_and_cleanup_session_logs
+import time
+
+SID_TO_SESSION_ID = {}
+
+def _get_session_id_from_ws(sid: str, data: dict | None = None) -> str | None:
+    if isinstance(data, dict):
+        s = data.get("session_id")
+        if s:
+            SID_TO_SESSION_ID[sid] = s
+            return s
+    return SID_TO_SESSION_ID.get(sid)
 from services.rag_singleton import rag_manager
 
 # Gets the logger instance
@@ -30,31 +45,44 @@ if IMAGE_TO_3D_MODEL == "Trellis":
 else:
     IMAGE_TO_3D_URL = os.getenv("HUNYUAN_API_URL")
 
+p = os.getenv("FRONTEND_LOG_FILE_PATH")
+FRONTEND_LOG_FILE_PATH = Path(p).absolute()
+FRONTEND_LOG_FILE_PATH.mkdir(parents=True, exist_ok=True)
+a = os.getenv("LOG_FILE_PATH")
+BACKEND_LOG_FILE_PATH = Path(a).absolute()
+
 @socketio.on('connect')
 def on_connect():
-    logger.info(f"[WS] CONNECT sid={request.sid}")
+    sid = request.sid
+    logger.info("[WS] CONNECT", sid=sid) #session_id will be bound on first message
+
 
 @socketio.on('disconnect')
 def on_disconnect():
-    logger.info(f"[WS] DISCONNECT sid={request.sid}")
-    active_pdf_by_sid.pop(request.sid, None)
+    sid = request.sid
+    session_id = SID_TO_SESSION_ID.pop(sid, None)
+    logger.info("[WS] DISCONNECT", sid=sid, session_id=session_id)
 
 
 @socketio.on("ask")
 def handle_ask(data):
-    """
-    WebSocket event handler.
-    Expects:
-      - 'audio' (base64), mandatory
-      - 'audio_response' (bool), optional
-      - 'objects' (int: 0, 1), optional
-      - 'max_objects' (int), optional
-    """
-    # Generate a unique ID for this specific interaction
     rid = str(uuid.uuid4())
+    sid = request.sid
+    session_id = _get_session_id_from_ws(sid, data)
+
     structlog.contextvars.clear_contextvars()
-    structlog.contextvars.bind_contextvars(rid=rid, connection="websocket")
-    
+    structlog.contextvars.bind_contextvars(
+        connection="websocket",
+        session_id=session_id,
+        rid=rid,
+        ws_event="ask",
+    )
+    worker_ctx = {
+        "session_id": session_id,
+        "rid": rid,
+    }
+
+
     try:
         sid = request.sid
         pdf_name = active_pdf_by_sid.get(sid)
@@ -72,47 +100,56 @@ def handle_ask(data):
         audio_b64 = data.get("audio_question")
         audio_bytes = base64.b64decode(audio_b64)
         max_objects = data.get("max_objects", 1)
-        
-        # Save incoming temporary audio
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
             tmp.write(audio_bytes)
             tmp_path = tmp.name
 
-        # STT
         transcription, language = transcribe_audio(tmp_path)
 
         emit("language_detected", {"language": language})
 
-        # 1. Create a Queue for audio tasks
         audio_queue = Queue()
 
-        # 2. Define the Audio Worker function
-        def audio_worker(sid):
+        def audio_worker(sid_local, ctx):
+            structlog.contextvars.bind_contextvars(**ctx)
             while True:
                 text_to_speak = audio_queue.get()
-                if text_to_speak is None: # Exit signal
-                    socketio.emit("audio_done", {"status": "completed"}, to=sid)
+                if text_to_speak is None:
+                    socketio.emit("audio_done", {"status": "completed"}, to=sid_local)
                     break
 
                 try:
-                    wav_b64 = tpool.execute(synthesize_wav, text_to_speak, language=language)
-                    
-                    socketio.emit("audio_sentence", {"base64": wav_b64}, to=sid)
+                    wav_b64 = tpool.execute(
+                        synthesize_wav,
+                        text_to_speak,
+                        language=language,
+                        context_data=ctx
+                    )
+
+                    socketio.emit(
+                        "audio_sentence",
+                        {"base64": wav_b64},
+                        to=sid_local
+                    )
+
                 except Exception as e:
-                    logger.error("audio_synthesis_failed", error=str(e))
-                
-                # Allow other tasks (like summary emission) to jump in
+                    logger.error(
+                        "audio_synthesis_failed",
+                        error=str(e),
+                        session_id=ctx.get("session_id"),
+                        rid=ctx.get("rid"),
+                        ws_event="audio_worker",
+                    )
+
                 socketio.sleep(0)
                 audio_queue.task_done()
 
-        # 3. Start the worker thread
-        socketio.start_background_task(audio_worker, sid)
+
+        socketio.start_background_task(audio_worker, sid, worker_ctx)
 
         try:
-            # Buffer to collect the full text answer (optional, depending on if you want summary in logs)
             full_answer = []
-            
-            # Variables to accumulate the summary
             summary_title = ""
             summary_bullets = []
 
@@ -121,23 +158,18 @@ def handle_ask(data):
             for text_content, message_type in stream_text_answer_by_sentence(transcription, pdf_name, sid):
 
                 if message_type == "speech":
-                    # Handle Speech Text
-                    # Send text chunk to main chat window
                     emit("text_chunk", {"text": text_content})
                     full_answer.append(text_content)
 
-                    # Push to audio queue for background processing
                     if audio_response:
                         audio_queue.put(text_content)
 
                 elif message_type == "title":
-                    # Capture the title
                     summary_title = text_content
 
                 elif message_type == "bullet":
-                    # Capture the bullet point
                     summary_bullets.append(text_content)
-                
+
                 socketio.sleep(0)
                 answer_text = " ".join(full_answer)
                 ans_lower = answer_text.lower()
@@ -163,13 +195,8 @@ def handle_ask(data):
                     socketio.emit("objects_done", {"status": "skipped"}, to=sid)
                     return
 
-            # Stream Finished: Emit the Whole Summary Event
-            # We only emit this once, containing the full structure
             if summary_title or summary_bullets:
-                emit("summary", {
-                    "title": summary_title,
-                    "body": summary_bullets
-                })
+                emit("summary", {"title": summary_title, "body": summary_bullets})
 
             # Logging
             logger.info(f"tutor_answer", full_text_answer=answer_text)
@@ -181,23 +208,21 @@ def handle_ask(data):
         
         obj_extracted, summary_img_extracted = extract_prompts(transcription, answer_text)
 
-        # Retrieve the current rid from the context
         context = structlog.contextvars.get_contextvars()
-        rid = context.get("rid")
-        # Define common headers to pass the rid to the other microservices
-        headers = {"X-Request-ID": rid} if rid else {}
-
+        rid_ctx = context.get("rid")
+        session_id_ctx = context.get("session_id")
+        headers = {}
+        if rid_ctx:
+            headers["X-Request-ID"] = rid_ctx
+        if session_id_ctx:
+            headers["X-Session-ID"] = session_id_ctx
         try:
             txt2img_response = requests.post(
-                TEXT_TO_IMAGE_URL, 
-                json={
-                    "prompt": summary_img_extracted.prompt,
-                    "summary": "true"
-                }, 
+                TEXT_TO_IMAGE_URL,
+                json={"prompt": summary_img_extracted.prompt, "summary": "true"},
                 headers=headers,
                 timeout=20
             )
-            # Check status before accessing .json()
             if txt2img_response.status_code == 200:
                 emit("summary_image", {
                     "image_id": txt2img_response.json().get("image_id"),
@@ -209,56 +234,127 @@ def handle_ask(data):
         except requests.exceptions.RequestException as e:
             logger.error("txt2img_connection_failed", error=str(e))
 
-
-        # 3D object generation
         if object_gen:
             socketio.start_background_task(
-                run_object_generation, sid, obj_extracted, language, headers
+                run_object_generation, sid, obj_extracted, language, headers, worker_ctx
             )
 
     except Exception as e:
         logger.error("error", error=str(e))
         emit("error", {"message": str(e)})
 
-# Generate 3D models and send their filenames to the client
-def run_object_generation(sid, obj_extracted, language, headers):
+
+@socketio.on("log")
+def handle_log_batch(data):
+    sid = request.sid
+
+    if not isinstance(data, dict) or data.get("type") != "log_batch":
+        emit("log_batch_ack", {"type": "log_batch_ack", "session_id": None, "acked_to_seq": 0, "ok": False}, to=sid)
+        return
+
+    session_id = data.get("session_id")
+    SID_TO_SESSION_ID[sid] = session_id
+
+    if not session_id:
+        emit("log_batch_ack", {"type": "log_batch_ack", "session_id": None, "acked_to_seq": 0, "ok": False}, to=sid)
+        return
+
+    rid = str(uuid.uuid4())
+
+    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.bind_contextvars(
+        connection="websocket",
+        session_id=session_id,
+        rid=rid,
+        user_id=data.get("user_id"),
+        condition=data.get("condition"),
+        ws_event="log_batch",
+    )
 
     try:
-        socketio.sleep(0)
-        obj_presentation_audio = synthesize_wav(obj_extracted.speech, language)
+        
+        acked_to_seq, rows_written = save_log_batch(FRONTEND_LOG_FILE_PATH, data)
+        logger.info("log_batch_saved", rows_written=rows_written, acked_to_seq=acked_to_seq)
 
-        # --- STEP 1: Text to Image ---
+        # CONTROLLO SE C'È L'EVENTO "session_end" NEL BATCH APPENA SALVATO
+        events = data.get("events", [])
+        session_ended = any(evt.get("event_name") == "session_end" for evt in events)
+
+        if session_ended:
+            logger.info("session_end_detected_in_logs", session_id=session_id)
+            
+            # Definizione del task di merge
+            def run_merge_task(sess_id):
+                # Aspettiamo qualche secondo per assicurarci che anche questo log ("session_end_detected...")
+                # sia stato scritto su app.log dal backend.
+                time.sleep(2.5) 
+                
+                fe_base_path = str(FRONTEND_LOG_FILE_PATH)
+                be_path = str(BACKEND_LOG_FILE_PATH)
+                out_path = FRONTEND_LOG_FILE_PATH.parent / "sessions" / f"full_session_{sess_id}.jsonl"
+
+                merge_and_cleanup_session_logs(sess_id, fe_base_path, be_path, str(out_path))
+
+            # Avvio del task in background
+            socketio.start_background_task(run_merge_task, session_id)
+
+        # ACK AL FRONTEND
+        emit("log_batch_ack", {
+            "type": "log_batch_ack",
+            "session_id": session_id,
+            "acked_to_seq": acked_to_seq,
+            "rid": rid,
+            "ok": True
+        }, to=sid)
+
+    except Exception as e:
+        logger.error("log_batch_failed", error=str(e))
+        emit("log_batch_ack", {
+            "type": "log_batch_ack",
+            "session_id": session_id,
+            "acked_to_seq": 0,
+            "rid": rid,
+            "ok": False
+        }, to=sid)
+
+
+def run_object_generation(sid, obj_extracted, language, headers, ctx):
+    structlog.contextvars.bind_contextvars(**ctx)
+    try:
+        socketio.sleep(0)
+        obj_presentation_audio = synthesize_wav(obj_extracted.speech, language, context_data=ctx)
+
         try:
             txt2img_response = requests.post(
-                TEXT_TO_IMAGE_URL, 
-                json={
-                    "prompt": obj_extracted.prompt,
-                    "summary": False
-                }, 
+                TEXT_TO_IMAGE_URL,
+                json={"prompt": obj_extracted.prompt, "summary": False},
                 headers=headers,
                 timeout=20
             )
         except requests.exceptions.RequestException as e:
             logger.error("txt2img_connection_failed", error=str(e))
+            socketio.emit("objects_done", {"status": "completed"}, to=sid)
+            return
 
         if txt2img_response.status_code == 200:
             img_id = txt2img_response.json().get("image_id")
 
-            # --- STEP 2: Image to 3D ---
             try:
                 img2obj_response = requests.post(
-                    IMAGE_TO_3D_URL, 
-                    json={"img_id": img_id}, 
+                    IMAGE_TO_3D_URL,
+                    json={"img_id": img_id},
                     headers=headers,
                     timeout=120
                 )
             except requests.exceptions.RequestException as e:
                 logger.error("img2obj_connection_failed", error=str(e))
+                socketio.emit("objects_done", {"status": "completed"}, to=sid)
+                return
 
             if img2obj_response.status_code == 200:
                 obj_filename = img2obj_response.json().get("object_id")
                 socketio.emit("object", {
-                    "object": obj_filename, 
+                    "object": obj_filename,
                     "text": obj_extracted.speech,
                     "speech": obj_presentation_audio
                 }, to=sid)

@@ -6,9 +6,12 @@ from flask import Flask, request
 from flask_cors import CORS
 from dotenv import load_dotenv, find_dotenv
 
-root_dir = "/home/vrai/Copy"
-if root_dir not in sys.path:
-    sys.path.insert(0, root_dir)
+# Load environment variables
+load_dotenv(find_dotenv())
+
+ROOT_DIR = os.getenv("ROOT_DIR")
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
 from shared.logger import setup_logging
 
@@ -16,15 +19,12 @@ from shared.logger import setup_logging
 logger = setup_logging("hunyuan-3d-api")
 
 # Get the directory where app.py is located
-project_root = "/home/vrai/Copy/obj_hunyuan_api"
+project_root = f"{ROOT_DIR}/obj_hunyuan_api"
 os.chdir(project_root)
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from controllers.controller import gen_bp
-
-# Load environment variables
-load_dotenv(find_dotenv())
 
 def create_app():
     app = Flask(__name__)
@@ -35,9 +35,10 @@ def create_app():
     def bind_request_details():
         # Get RID from headers (sent by Orchestrator) or generate new one
         rid = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+        session_id = request.headers.get("X-Session-ID")
         # Bind rid so all logs in this request context have it
         structlog.contextvars.clear_contextvars()
-        structlog.contextvars.bind_contextvars(rid=rid)
+        structlog.contextvars.bind_contextvars(rid=rid, session_id=session_id)
 
     app.register_blueprint(gen_bp, url_prefix="/api")
     return app
