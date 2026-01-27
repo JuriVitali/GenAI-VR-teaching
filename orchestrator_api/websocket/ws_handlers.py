@@ -19,6 +19,8 @@ from dotenv import load_dotenv, find_dotenv
 from services.object_extraction_service import extract_prompts
 from queue import Queue
 from pathlib import Path
+from shared.log_merger import merge_and_cleanup_session_logs
+import time
 
 SID_TO_SESSION_ID = {}
 
@@ -46,7 +48,8 @@ else:
 p = os.getenv("FRONTEND_LOG_FILE_PATH")
 FRONTEND_LOG_FILE_PATH = Path(p).absolute()
 FRONTEND_LOG_FILE_PATH.mkdir(parents=True, exist_ok=True)
-
+a = os.getenv("LOG_FILE_PATH")
+BACKEND_LOG_FILE_PATH = Path(a).absolute()
 
 @socketio.on('connect')
 def on_connect():
@@ -109,6 +112,7 @@ def handle_ask(data):
         audio_queue = Queue()
 
         def audio_worker(sid_local, ctx):
+            structlog.contextvars.bind_contextvars(**ctx)
             while True:
                 text_to_speak = audio_queue.get()
                 if text_to_speak is None:
@@ -119,7 +123,8 @@ def handle_ask(data):
                     wav_b64 = tpool.execute(
                         synthesize_wav,
                         text_to_speak,
-                        language=language
+                        language=language,
+                        context_data=ctx
                     )
 
                     socketio.emit(
@@ -231,7 +236,7 @@ def handle_ask(data):
 
         if object_gen:
             socketio.start_background_task(
-                run_object_generation, sid, obj_extracted, language, headers
+                run_object_generation, sid, obj_extracted, language, headers, worker_ctx
             )
 
     except Exception as e:
@@ -266,11 +271,34 @@ def handle_log_batch(data):
         ws_event="log_batch",
     )
 
-
     try:
+        
         acked_to_seq, rows_written = save_log_batch(FRONTEND_LOG_FILE_PATH, data)
         logger.info("log_batch_saved", rows_written=rows_written, acked_to_seq=acked_to_seq)
 
+        # CONTROLLO SE C'È L'EVENTO "session_end" NEL BATCH APPENA SALVATO
+        events = data.get("events", [])
+        session_ended = any(evt.get("event_name") == "session_end" for evt in events)
+
+        if session_ended:
+            logger.info("session_end_detected_in_logs", session_id=session_id)
+            
+            # Definizione del task di merge
+            def run_merge_task(sess_id):
+                # Aspettiamo qualche secondo per assicurarci che anche questo log ("session_end_detected...")
+                # sia stato scritto su app.log dal backend.
+                time.sleep(2.5) 
+                
+                fe_base_path = str(FRONTEND_LOG_FILE_PATH)
+                be_path = str(BACKEND_LOG_FILE_PATH)
+                out_path = FRONTEND_LOG_FILE_PATH.parent / "sessions" / f"full_session_{sess_id}.jsonl"
+
+                merge_and_cleanup_session_logs(sess_id, fe_base_path, be_path, str(out_path))
+
+            # Avvio del task in background
+            socketio.start_background_task(run_merge_task, session_id)
+
+        # ACK AL FRONTEND
         emit("log_batch_ack", {
             "type": "log_batch_ack",
             "session_id": session_id,
@@ -290,10 +318,11 @@ def handle_log_batch(data):
         }, to=sid)
 
 
-def run_object_generation(sid, obj_extracted, language, headers):
+def run_object_generation(sid, obj_extracted, language, headers, ctx):
+    structlog.contextvars.bind_contextvars(**ctx)
     try:
         socketio.sleep(0)
-        obj_presentation_audio = synthesize_wav(obj_extracted.speech, language)
+        obj_presentation_audio = synthesize_wav(obj_extracted.speech, language, context_data=ctx)
 
         try:
             txt2img_response = requests.post(

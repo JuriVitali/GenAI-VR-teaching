@@ -178,7 +178,9 @@ def stream_text_answer_by_sentence(question: str, pdf_name: str | None, session_
     update_chat_history(session_id, question, full_answer_accumulator)
 
 @log_event("audio_generation")
-def synthesize_wav(sentence, language=xtts_config["default_language"]):
+def synthesize_wav(sentence, language=xtts_config["default_language"], context_data=None):
+    if context_data:
+        structlog.contextvars.bind_contextvars(**context_data)
     structlog.contextvars.bind_contextvars(sentence=sentence, language=language)
     if sentence.endswith("."):
         sentence = sentence[:-1]
