@@ -1,4 +1,3 @@
-# ws_handlers.py
 from flask_socketio import SocketIO, emit
 from flask import request
 from eventlet import tpool
@@ -7,6 +6,7 @@ import tempfile
 import os
 import base64
 import uuid
+import json
 from services.frontend_log_service import save_log_batch
 from app import socketio
 from services.answer_service import (
@@ -50,6 +50,35 @@ FRONTEND_LOG_FILE_PATH = Path(p).absolute()
 FRONTEND_LOG_FILE_PATH.mkdir(parents=True, exist_ok=True)
 a = os.getenv("LOG_FILE_PATH")
 BACKEND_LOG_FILE_PATH = Path(a).absolute()
+
+# --- JSON PRE-GENERATION SETUP ---
+PRE_GENERATED_PATH = Path("shared/pre_generated")
+PRE_GENERATED_PATH.mkdir(parents=True, exist_ok=True)
+
+def _get_json_path(pdf_name):
+    # Sanitize pdf_name just in case
+    safe_name = Path(pdf_name).stem
+    return PRE_GENERATED_PATH / f"{safe_name}.json"
+
+def _get_existing_questions(pdf_name):
+    """Retrieves a list of {id, text} for existing questions in the JSON file."""
+    file_path = _get_json_path(pdf_name)
+    questions = []
+    
+    if file_path.exists():
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                # Extract only id and text_question for the frontend list
+                for item in data:
+                    questions.append({
+                        "id": item.get("question_id"),
+                        "text": item.get("text_question")
+                    })
+        except Exception as e:
+            logger.error(f"Failed to load questions for {pdf_name}", error=str(e))
+    
+    return questions
 
 @socketio.on('connect')
 def on_connect():
@@ -97,15 +126,16 @@ def handle_ask(data):
 
         audio_response = data.get("audio_response", True)
         object_gen = int(data.get("objects", 0))
-        audio_b64 = data.get("audio_question")
-        audio_bytes = base64.b64decode(audio_b64)
+        transcription = data.get("audio_question")
+        #audio_bytes = base64.b64decode(audio_b64)
         max_objects = data.get("max_objects", 1)
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        """with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
             tmp.write(audio_bytes)
-            tmp_path = tmp.name
+            tmp_path = tmp.name"""
 
-        transcription, language = transcribe_audio(tmp_path)
+        #transcription, language = transcribe_audio(tmp_path)
+        language = "it"
 
         emit("language_detected", {"language": language})
 
@@ -242,6 +272,108 @@ def handle_ask(data):
     except Exception as e:
         logger.error("error", error=str(e))
         emit("error", {"message": str(e)})
+
+
+@socketio.on("default_ask")
+def handle_default_ask(data):
+    sid = request.sid
+    
+    # 1. Retrieve inputs
+    question_id = data.get("question_id")
+    audio_response = data.get("audio_response", True)
+    objects_enabled = data.get("objects", False)
+
+    # 2. Validation
+    pdf_name = active_pdf_by_sid.get(sid)
+    if not pdf_name:
+        emit("error", {"message": "No PDF selected. Please select a PDF first."}, to=sid)
+        return
+
+    if question_id is None:
+        emit("error", {"message": "Missing question_id."}, to=sid)
+        return
+
+    # 3. Retrieve Data from JSON
+    file_path = _get_json_path(pdf_name)
+    target_data = None
+    
+    if file_path.exists():
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                saved_list = json.load(f)
+                # Find the entry with the matching ID
+                for entry in saved_list:
+                    if entry.get("question_id") == question_id:
+                        target_data = entry
+                        break
+        except Exception as e:
+            logger.error(f"Failed to load json for default_ask: {pdf_name}", error=str(e))
+    
+    if not target_data:
+        emit("error", {"message": f"Question ID {question_id} not found for this PDF."}, to=sid)
+        return
+
+    # 4. Emit Events in Sequence
+    
+    # A. Language Detected (fixed to 'it' per instructions)
+    emit("language_detected", {"language": "it"})
+    
+    # B. Text Chunks and Audio Sentences (Interleaved)
+    text_chunks = target_data.get("text_chunks", [])
+    audio_sentences = target_data.get("audio_sentences", [])
+    
+    # We iterate based on text chunks. 
+    # Safety: Use length of text_chunks. If audio is missing for a chunk, we skip audio emission.
+    count = len(text_chunks)
+    
+    for i in range(count):
+        socketio.sleep(0.3)
+        # Emit Text Chunk
+        txt = text_chunks[i]
+        emit("text_chunk", {"text": txt})
+        
+        # Emit Audio Sentence (if enabled and exists)
+        if audio_response and i < len(audio_sentences):
+            b64_audio = audio_sentences[i]
+            if b64_audio: # Ensure it's not empty
+                emit("audio_sentence", {"base64": b64_audio})
+        
+        
+    socketio.sleep(0.2)
+    # C. Text Done
+    emit("text_done", {"status": "completed"})
+
+    # D. Audio Done (if enabled)
+    if audio_response:
+        emit("audio_done", {"status": "completed"})
+
+    # E. Summary
+    summ = target_data.get("summary", {})
+    if summ.get("title") or summ.get("body"):
+        emit("summary", {"title": summ.get("title", ""), "body": summ.get("body", [])})
+
+    socketio.sleep(0.3)
+    # F. Summary Image
+    summ_img = target_data.get("summary_image", {})
+    if summ_img.get("image_id"):
+        emit("summary_image", {
+            "image_id": summ_img.get("image_id"),
+            "caption": summ_img.get("caption", "")
+        })
+
+    socketio.sleep(10)
+    # G. Objects (if enabled)
+    if objects_enabled:
+        obj_data = target_data.get("object", {})
+        # Only emit 'object' event if there is actual object data
+        if obj_data.get("object"):
+             emit("object", {
+                "object": obj_data.get("object"),
+                "text": obj_data.get("text", ""),
+                "speech": obj_data.get("speech", "")
+            })
+        
+        emit("objects_done", {"status": "completed"})
 
 
 @socketio.on("log")
@@ -381,18 +513,39 @@ def handle_pdf_selected(data):
     active_pdf_by_sid[sid] = pdf_name
 
     st, err = rag_manager.get_status(pdf_name)
+    
+    # --- Fetch existing questions (if any) ---
+    existing_questions = _get_existing_questions(pdf_name)
+    # -----------------------------------------
+
     if st == "ready":
-        emit("pdf_selected_ack", {"pdf_name": pdf_name, "status": "ok"}, to=sid)
+        emit("pdf_selected_ack", {
+            "pdf_name": pdf_name, 
+            "status": "ok",
+            "questions": existing_questions
+        }, to=sid)
         return
     if st == "building":
         # opzionale
-        emit("pdf_selected_ack", {"pdf_name": pdf_name, "status": "building"}, to=sid)
+        emit("pdf_selected_ack", {
+            "pdf_name": pdf_name, 
+            "status": "building",
+            "questions": existing_questions
+        }, to=sid)
         return
 
     def build_and_ack():
         ok, msg = tpool.execute(rag_manager.ensure_ready, pdf_name)
+
+        # Re-fetch just in case
+        questions_after_build = _get_existing_questions(pdf_name)
+
         if ok:
-            socketio.emit("pdf_selected_ack", {"pdf_name": pdf_name, "status": "ok"}, to=sid)
+            socketio.emit("pdf_selected_ack", {
+                "pdf_name": pdf_name, 
+                "status": "ok",
+                "questions": questions_after_build
+            }, to=sid)
         else:
             st2, err2 = rag_manager.get_status(pdf_name)
             socketio.emit(
@@ -402,4 +555,3 @@ def handle_pdf_selected(data):
             )
 
     socketio.start_background_task(build_and_ack)
-
