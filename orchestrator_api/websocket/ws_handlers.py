@@ -126,16 +126,15 @@ def handle_ask(data):
 
         audio_response = data.get("audio_response", True)
         object_gen = int(data.get("objects", 0))
-        transcription = data.get("audio_question")
-        #audio_bytes = base64.b64decode(audio_b64)
+        audio_b64 = data.get("audio_question")
+        audio_bytes = base64.b64decode(audio_b64)
         max_objects = data.get("max_objects", 1)
 
-        """with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
             tmp.write(audio_bytes)
-            tmp_path = tmp.name"""
+            tmp_path = tmp.name
 
-        #transcription, language = transcribe_audio(tmp_path)
-        language = "it"
+        transcription, language = transcribe_audio(tmp_path)
 
         emit("language_detected", {"language": language})
 
