@@ -58,8 +58,6 @@ def stream_text_answer_by_sentence(question: str, pdf_name: str | None, session_
             logger.error(f"RAG Retrieval failed: {e}")
             structlog.contextvars.bind_contextvars(rag_pdf=pdf_name, rag_error="retrieve_failed")
             context, sources = "", []
-
-    prompt = tutor_config["prompt"].format(question=question, context=context)
     
     # [DEBUG] Verifica che il prompt parta
     print(f"\n[DEBUG] Prompt sent to LLM. Context len: {len(context)} chars. Waiting for stream...\n")
@@ -163,16 +161,12 @@ def stream_text_answer_by_sentence(question: str, pdf_name: str | None, session_
             if not found_title:
                 yield (line, "title")
             else:
-                yield (buffer.strip(), "speech")
-        
-        # --- FALLBACK PER BUFFER VUOTO ---
-        if chunks_received == 0:
-            print("[DEBUG] No chunks received from LLM!")
-            yield ("Mi dispiace, c'è stato un problema tecnico e non riesco a formulare una risposta.", "speech")
-        elif not buffer.strip() and chunks_received > 0:
-             print("[DEBUG] Chunks received but buffer empty (maybe only thinking?)")
-                
-
+                # FIX: Treat the last line as a bullet and clean it
+                clean_line = line.lstrip("*").strip()
+                yield (clean_line, "bullet")  # Changed from "speech" to "bullet"
+        else:
+            # If we never entered summary mode, it really is speech
+            yield (buffer.strip(), "speech")
 
     # Save to Memory
     update_chat_history(session_id, question, full_answer_accumulator)
