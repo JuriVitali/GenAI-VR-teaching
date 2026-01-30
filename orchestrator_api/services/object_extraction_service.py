@@ -8,6 +8,8 @@ from shared.utils import log_event
 # Load model configuration params
 model_config = ModelConfig()
 prompt_extraction_config = model_config.get("prompt_extraction")
+prompt_enhancement_config = model_config.get("prompt_enhancement")
+prompt_enhancement_model = get_llm_model(prompt_extraction_config["model"], prompt_extraction_config["temperature"])
 prompt_extraction_model = get_llm_model(prompt_extraction_config["model"], prompt_extraction_config["temperature"])
 
 # --- OUTPUT DATA STRUCTURES ---
@@ -61,3 +63,11 @@ def extract_prompts(question: str, answer: str) -> List[SceneItem]:
     response = structured_llm_json.invoke(prompt)
 
     return response.obj, response.img
+
+@log_event("prompt_improvement")
+def improve_prompt(raw_prompt: str):
+    structlog.contextvars.bind_contextvars(raw_prompt=raw_prompt)
+    full_prompt = prompt_enhancement_config["prompt"].format(raw_prompt=raw_prompt)
+    improved_prompt = prompt_enhancement_model.invoke(full_prompt)
+
+    return improved_prompt.content

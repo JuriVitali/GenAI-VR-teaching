@@ -43,13 +43,13 @@ def transcribe_audio(audio_path):
 
 
 @log_event("text_answer_generation")
-def stream_text_answer_by_sentence(question: str, pdf_name: str | None, session_id: str):
+def stream_text_answer_by_sentence(question: str, language: str, pdf_name: str | None, session_id: str):
     structlog.contextvars.bind_contextvars(question=question)
 
     context, sources = "", []
     if pdf_name:
         try:
-            # Recupera contesto
+            # Retrieve context
             context, sources = rag_manager.retrieve_context(pdf_name, question, k=5)
             structlog.contextvars.bind_contextvars(rag_sources=sources, rag_pdf=pdf_name)
         except Exception as e:
@@ -60,7 +60,7 @@ def stream_text_answer_by_sentence(question: str, pdf_name: str | None, session_
     print(f"\n[DEBUG] Prompt sent to LLM. Context len: {len(context)} chars. Waiting for stream...\n")
 
     # Construct the Message List
-    system_text = tutor_config["prompt"].format(context=context)
+    system_text = tutor_config["prompt"].format(context=context, language=language)
     
     messages = [
         SystemMessage(content=system_text),
@@ -72,27 +72,97 @@ def stream_text_answer_by_sentence(question: str, pdf_name: str | None, session_
     # Add Current Question
     messages.append(HumanMessage(content=question))
 
-    # --- DEFINIZIONE MARKERS ---
-    AUDIO_MARKER = "**AUDIO SCRIPT**"
-    SUMMARY_MARKER = "**SUMMARY**"
+    # --- DEFINITION OF MARKERS & SECTIONS ---
+    # We define the order in which we expect sections to appear.
+    # The 'type' is the label yielded to the frontend/system.
+    SECTION_MAP = {
+        "**AUDIO SCRIPT**": "speech",
+        "**SUMMARY**": "summary",
+        "**IMAGE BLUEPRINT**": "image_blueprint",
+        "**IMAGE CAPTION**": "image_caption",
+        "**3D OBJECT BLUEPRINT**": "3d_blueprint",
+        "**3D OBJECT PRESENTATION**": "3d_speech"
+    }
+    
+    # Create an ordered list of markers for detection
+    MARKERS = list(SECTION_MAP.keys())
 
     buffer = ""
     full_answer_accumulator = ""
     
-    # State flags
-    is_summary_mode = False
+    # State tracking
+    current_marker = None  # Start undefined
+    found_summary_title = False
     inside_think_tag = False 
-    found_title = False
     chunks_received = 0
     raw_answer_full = ""
 
-    # Now start the stream
+    # Helper: Process a block of text based on the current active section
+    def process_section_content(content, section_marker, is_final_flush=False):
+        nonlocal found_summary_title
+        if not content.strip():
+            return [], "" 
+
+        section_type = SECTION_MAP.get(section_marker)
+        yielded_items = []
+
+        # 1. AUDIO SCRIPT or 3D PRESENTATION (Speech Logic)
+        if section_type in ["speech", "3d_speech"]:
+            sentences = re.split(r'([.!?])', content)
+            limit = len(sentences) if is_final_flush else len(sentences) - 1
+            
+            for i in range(0, limit, 2):
+                if i+1 < len(sentences):
+                    s = sentences[i].strip() + sentences[i+1].strip()
+                    if s: yielded_items.append((s, section_type))
+                elif is_final_flush and sentences[i].strip():
+                    yielded_items.append((sentences[i].strip(), section_type))
+            
+            leftover = ""
+            if not is_final_flush and len(sentences) % 2 == 1:
+                leftover = sentences[-1]
+            return yielded_items, leftover
+
+        # 2. SUMMARY (Title/Bullet Logic)
+        elif section_type == "summary":
+            lines = content.split('\n')
+            limit = len(lines) if is_final_flush else len(lines) - 1
+            
+            for i in range(limit):
+                line = lines[i].strip()
+                if not line: continue
+                
+                if not found_summary_title:
+                    clean_title = line.strip("*# ").strip()
+                    yielded_items.append((clean_title, "title"))
+                    found_summary_title = True
+                else:
+                    clean_bullet = line.lstrip("* ").strip()
+                    if clean_bullet:
+                        yielded_items.append((clean_bullet, "bullet"))
+            
+            leftover = ""
+            if not is_final_flush:
+                leftover = lines[-1]
+            return yielded_items, leftover
+
+        # 3. BLUEPRINTS & CAPTIONS (Whole Block Logic)
+        else:
+            if is_final_flush:
+                clean_text = content.strip()
+                if clean_text:
+                    yielded_items.append((clean_text, section_type))
+                return yielded_items, ""
+            else:
+                return yielded_items, content
+
+    # --- STREAMING LOOP ---
     for chunk in question_answerer_model.stream(messages):
         text_chunk = chunk.content
         chunks_received += 1
         raw_answer_full += text_chunk
         
-        # 1. Handle Thinking Tags (DeepSeek R1 Specific)
+        # 1. Handle Thinking Tags (DeepSeek R1 / Generic)
         if "<think>" in text_chunk:
             inside_think_tag = True
             text_chunk = text_chunk.replace("<think>", "")
@@ -108,83 +178,54 @@ def stream_text_answer_by_sentence(question: str, pdf_name: str | None, session_
         buffer += text_chunk
         full_answer_accumulator += text_chunk
 
-        # --- MODE 1: SPEECH (AUDIO) ---
-        if not is_summary_mode:
-            # Pulizia iniziale: Rimuove il marker audio se presente
-            if AUDIO_MARKER in buffer:
-                buffer = buffer.replace(AUDIO_MARKER, "").lstrip()
+        # 2. Detect Section Transitions
+        # Check if ANY marker appears in the buffer
+        found_marker = None
+        found_marker_index = -1
 
-            # Controllo se siamo arrivati al marker del sommario
-            if SUMMARY_MARKER in buffer:
-                # Split speech from summary
-                speech_part, summary_part = buffer.split(SUMMARY_MARKER, 1)
-                
-                # Flush speech sentences (processa tutto il parlato rimasto)
-                if speech_part.strip():
-                    sentences = re.split(r'([.!?])', speech_part)
-                    for i in range(0, len(sentences) - 1, 2):
-                        sentence = sentences[i].strip() + sentences[i+1].strip()
-                        if sentence:
-                            yield (sentence, "speech")
-                    
-                    # Flush tail (l'ultima frase prima del marker)
-                    if len(sentences) % 2 == 1 and sentences[-1].strip():
-                        yield (sentences[-1].strip(), "speech")
-                
-                # Switch to Summary Mode
-                is_summary_mode = True
-                buffer = summary_part # Il buffer ora contiene solo la parte dopo ###SUMMARY###
-            else:
-                # Standard Speech buffering logic (emetto frasi complete mentre arrivano)
-                sentences = re.split(r'([.!?])', buffer)
-                for i in range(0, len(sentences) - 1, 2):
-                    s = sentences[i].strip() + sentences[i+1].strip()
-                    if s: yield (s, "speech")
-                
-                # Tengo l'ultima parte incompleta nel buffer
-                buffer = sentences[-1] if len(sentences) % 2 == 1 else ""
+        for marker in MARKERS:
+            if marker in buffer:
+                # We need to find the earliest marker in the buffer to split correctly
+                idx = buffer.find(marker)
+                if found_marker is None or idx < found_marker_index:
+                    found_marker = marker
+                    found_marker_index = idx
 
-        # --- MODE 2: SUMMARY (Title + Bullets) ---
-        if is_summary_mode:
-            lines = buffer.split('\n')
-            for i in range(len(lines) - 1):
-                line = lines[i].strip()
-                if not line: continue 
-
-                if not found_title:
-                    # Il titolo viene pulito da tutto (grassetto e cancelletti)
-                    clean_title = line.strip("*# ").strip()
-                    yield (clean_title, "title")
-                    found_title = True
-                else:
-                    # Rimuove solo il primo asterisco e lo spazio successivo
-                    # Esempio: "* **Testo**" diventa "**Testo**"
-                    clean_bullet = line.lstrip("* ").strip()
-                    if clean_bullet:
-                        yield (clean_bullet, "bullet")
+        # 3. Handle Transition
+        if found_marker:
+            # content_before belongs to the OLD section
+            content_before = buffer[:found_marker_index]
             
-            buffer = lines[-1]
+            # Flush the OLD section
+            if current_marker:
+                items, _ = process_section_content(content_before, current_marker, is_final_flush=True)
+                for item in items: yield item
+            
+            # Start the NEW section
+            current_marker = found_marker
+            
+            # Remove the marker from buffer and continue processing the rest
+            # We add a generic strip to remove newlines immediately after markers
+            buffer = buffer[found_marker_index + len(found_marker):].lstrip()
 
-    # --- FINAL FLUSH ---
-    if buffer.strip():
-        if is_summary_mode:
-            line = buffer.strip()
-            if not found_title:
-                yield (line.strip("*# "), "title")
-            else:
-                # Applica la stessa logica "conservativa" per l'ultimo bullet
-                clean_bullet = line.lstrip("* ").strip()
-                yield (clean_bullet, "bullet")
-        else:
-            yield (buffer.strip(), "speech")
+        # 4. Incremental Processing (within current section)
+        if current_marker:
+            items, new_buffer = process_section_content(buffer, current_marker, is_final_flush=False)
+            for item in items: yield item
+            buffer = new_buffer
     
-    # --- PRINT FULL RAW OUTPUT ---
+    # --- FINAL FLUSH ---
+    # Process whatever is left in the buffer for the last active section
+    if current_marker and buffer.strip():
+        items, _ = process_section_content(buffer, current_marker, is_final_flush=True)
+        for item in items: yield item
+    
+    # --- LOGGING & HISTORY ---
     print("\n" + "="*50)
     print("FULL LLM RESPONSE (RAW):")
     print(raw_answer_full)
     print("="*50 + "\n")
 
-    # Save to Memory
     update_chat_history(session_id, question, full_answer_accumulator)
 
 @log_event("audio_generation")
