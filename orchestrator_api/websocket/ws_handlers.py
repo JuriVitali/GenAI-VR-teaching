@@ -155,13 +155,16 @@ def handle_ask(data):
                     break
 
                 try:
+                    logger.info("audio_generation_started", sentence=text_to_speak)
+                    start_t=time.perf_counter()
                     wav_b64 = tpool.execute(
                         synthesize_wav,
                         text_to_speak,
                         language=language,
                         context_data=ctx
                     )
-
+                    duration = time.perf_counter() - start_t
+                    logger.info("audio_generation_finished", duration=duration)
                     socketio.emit(
                         "audio_sentence",
                         {"base64": wav_b64},
@@ -187,6 +190,8 @@ def handle_ask(data):
             full_answer = []
             summary_title = ""
             summary_bullets = []
+
+            is_negative_answer = False
             
             # New containers for multimedia assets
             summary_img_blueprint_text = None
@@ -227,62 +232,65 @@ def handle_ask(data):
                 socketio.sleep(0)
 
                 # --- NEGATIVE ANSWER CHECK ---
-                # If the LLM says "I can't find the answer", abort generation immediately
-                current_full_text = " ".join(full_answer).lower()
-                negative_triggers = [
-                    "mi dispiace", "non ho trovato", "non è possibile trovare", 
-                    "non dispongo di informazioni", "i cannot find the answer",
-                    "non c'è risposta", "non sono in grado di", "non so la risposta",
-                    "non posso rispondere", "non ho informazioni", "non ho dati", 
-                    "non riesco a trovare"
-                ]
-                
-                if any(trigger in current_full_text for trigger in negative_triggers):
-                    logger.info("[SKIP] Asset generation skipped: Negative answer detected.")
-                    socketio.emit("objects_done", {"status": "skipped"}, to=sid)
-                    # Stop TTS worker if needed
-                    audio_queue.put(None)
-                    return
+                # Check only if we haven't flagged it yet
+                if not is_negative_answer:
+                    current_full_text = " ".join(full_answer).lower()
+                    negative_triggers = [
+                        "mi dispiace", "non ho trovato", "non è possibile trovare", 
+                        "non dispongo di informazioni", "i cannot find the answer",
+                        "non c'è risposta", "non sono in grado di", "non so la risposta",
+                        "non posso rispondere", "non ho informazioni", "non ho dati", 
+                        "non riesco a trovare"
+                    ]
+                    
+                    if any(trigger in current_full_text for trigger in negative_triggers):
+                        logger.info("[FLAG] Negative answer detected. Will skip assets at the end.")
+                        is_negative_answer = True
+                    
 
             # --- POST-STREAM PROCESSING ---
-            
-            # 1. Send Summary to UI
-            if summary_title or summary_bullets:
-                # Note: You might want to include the caption here if your UI expects it immediately
-                emit("summary", {
-                    "title": summary_title, 
-                    "body": summary_bullets,
-                })
+            if is_negative_answer:
+                logger.info("[SKIP] Asset generation skipped: Negative answer detected.")
+                # Avvisiamo il frontend che non arriveranno oggetti
+                socketio.emit("objects_done", {"status": "skipped"}, to=sid)
+            else:
+                # 1. Send Summary to UI
+                if summary_title or summary_bullets:
+                    # Note: You might want to include the caption here if your UI expects it immediately
+                    emit("summary", {
+                        "title": summary_title, 
+                        "body": summary_bullets,
+                    })
 
-            # 2. Trigger Image Generation (Steps 4-5)
-            if summary_img_blueprint_text:
-                summary_img_prompt = improve_prompt(summary_img_blueprint_text)
-                
-                try:
-                    txt2img_response = requests.post(
-                        TEXT_TO_IMAGE_URL,
-                        json={"prompt": summary_img_prompt, "summary": "true"},
-                        headers=headers,
-                        timeout=20
-                    )
-                    if txt2img_response.status_code == 200:
-                        emit("summary_image", {
-                            "image_id": txt2img_response.json().get("image_id"),
-                            "caption": summary_img_caption
-                        })
-                    else:
-                        logger.error("txt2img_error", status=txt2img_response.status_code)
+                # 2. Trigger Image Generation (Steps 4-5)
+                if summary_img_blueprint_text:
+                    summary_img_prompt = improve_prompt(summary_img_blueprint_text)
+                    
+                    try:
+                        txt2img_response = requests.post(
+                            TEXT_TO_IMAGE_URL,
+                            json={"prompt": summary_img_prompt, "summary": "true"},
+                            headers=headers,
+                            timeout=20
+                        )
+                        if txt2img_response.status_code == 200:
+                            emit("summary_image", {
+                                "image_id": txt2img_response.json().get("image_id"),
+                                "caption": summary_img_caption
+                            })
+                        else:
+                            logger.error("txt2img_error", status=txt2img_response.status_code)
 
-                except requests.exceptions.RequestException as e:
-                    logger.error("txt2img_connection_failed", error=str(e))
+                    except requests.exceptions.RequestException as e:
+                        logger.error("txt2img_connection_failed", error=str(e))
 
-            # 3. Trigger 3D Object Generation (Step 6)
-            if (object_gen and obj_blueprint_text):
-                # TODO: Adjust this part using the previous variables
-                if object_gen:
-                    socketio.start_background_task(
-                        run_object_generation, sid, obj_blueprint_text, obj_presentation_text, language, headers, worker_ctx
-                    )
+                # 3. Trigger 3D Object Generation (Step 6)
+                if (object_gen and obj_blueprint_text):
+                    # TODO: Adjust this part using the previous variables
+                    if object_gen:
+                        socketio.start_background_task(
+                            run_object_generation, sid, obj_blueprint_text, obj_presentation_text, language, headers, worker_ctx
+                        )
 
             # Final Logging
             answer_text = " ".join(full_answer)
