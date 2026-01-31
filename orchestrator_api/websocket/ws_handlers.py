@@ -55,6 +55,8 @@ BACKEND_LOG_FILE_PATH = Path(a).absolute()
 PRE_GENERATED_PATH = Path("shared/pre_generated")
 PRE_GENERATED_PATH.mkdir(parents=True, exist_ok=True)
 
+current_id= -1
+
 def _get_json_path(pdf_name):
     # Sanitize pdf_name just in case
     safe_name = Path(pdf_name).stem
@@ -109,6 +111,7 @@ def handle_ask(data):
     worker_ctx = {
         "session_id": session_id,
         "rid": rid,
+        "request_id": data.get("request_id", -1)
     }
     context = structlog.contextvars.get_contextvars()
     rid_ctx = context.get("rid")
@@ -130,7 +133,7 @@ def handle_ask(data):
         if st != "ready":
             emit("error", {"message": f"PDF not ready: {st}. Please wait."}, to=sid)
             return
-
+        current_id = data.get("request_id", -1)
         audio_response = data.get("audio_response", True)
         object_gen = int(data.get("objects", 0))
         audio_b64 = data.get("audio_question")
@@ -151,7 +154,7 @@ def handle_ask(data):
             while True:
                 text_to_speak = audio_queue.get()
                 if text_to_speak is None:
-                    socketio.emit("audio_done", {"status": "completed"}, to=sid_local)
+                    socketio.emit("audio_done", {"status": "completed", "request_id": current_id}, to=sid_local)
                     break
 
                 try:
@@ -167,7 +170,7 @@ def handle_ask(data):
                     logger.info("audio_generation_finished", duration=duration)
                     socketio.emit(
                         "audio_sentence",
-                        {"base64": wav_b64},
+                        {"base64": wav_b64, "request_id": ctx.get("request_id")},
                         to=sid_local
                     )
 
@@ -204,7 +207,7 @@ def handle_ask(data):
 
                 # 1. MAIN SPEECH (Immediate TTS)
                 if message_type == "speech":
-                    emit("text_chunk", {"text": text_content})
+                    emit("text_chunk", {"text": text_content, "request_id": current_id})
                     full_answer.append(text_content)
                     
                     if audio_response:
@@ -252,7 +255,7 @@ def handle_ask(data):
             if is_negative_answer:
                 logger.info("[SKIP] Asset generation skipped: Negative answer detected.")
                 # Avvisiamo il frontend che non arriveranno oggetti
-                socketio.emit("objects_done", {"status": "skipped"}, to=sid)
+                socketio.emit("objects_done", {"status": "skipped", "request_id": current_id}, to=sid)
             else:
                 # 1. Send Summary to UI
                 if summary_title or summary_bullets:
@@ -260,6 +263,7 @@ def handle_ask(data):
                     emit("summary", {
                         "title": summary_title, 
                         "body": summary_bullets,
+                        "request_id": current_id
                     })
 
                 # 2. Trigger Image Generation (Steps 4-5)
@@ -276,7 +280,8 @@ def handle_ask(data):
                         if txt2img_response.status_code == 200:
                             emit("summary_image", {
                                 "image_id": txt2img_response.json().get("image_id"),
-                                "caption": summary_img_caption
+                                "caption": summary_img_caption,
+                                "request_id": current_id
                             })
                         else:
                             logger.error("txt2img_error", status=txt2img_response.status_code)
@@ -295,7 +300,7 @@ def handle_ask(data):
             # Final Logging
             answer_text = " ".join(full_answer)
             logger.info("tutor_answer", full_text_answer=answer_text)
-            emit("text_done", {"status": "completed"})
+            emit("text_done", {"status": "completed", "request_id": current_id})
 
         finally:
             # Clean up: Tell the worker to stop after the queue is empty
@@ -314,6 +319,7 @@ def handle_default_ask(data):
     question_id = data.get("question_id")
     audio_response = data.get("audio_response", True)
     objects_enabled = data.get("objects", False)
+    current_id = data.get("request_id", -1)
 
     # 2. Validation
     pdf_name = active_pdf_by_sid.get(sid)
@@ -362,35 +368,35 @@ def handle_default_ask(data):
         socketio.sleep(0.3)
         # Emit Text Chunk
         txt = text_chunks[i]
-        emit("text_chunk", {"text": txt})
+        emit("text_chunk", {"text": txt, "request_id": current_id})
         
         # Emit Audio Sentence (if enabled and exists)
         if audio_response and i < len(audio_sentences):
             b64_audio = audio_sentences[i]
             if b64_audio: # Ensure it's not empty
-                emit("audio_sentence", {"base64": b64_audio})
+                emit("audio_sentence", {"base64": b64_audio, "request_id": current_id})
         
         
     socketio.sleep(0.2)
     # C. Text Done
-    emit("text_done", {"status": "completed"})
+    emit("text_done", {"status": "completed", "request_id": current_id})
 
     # D. Audio Done (if enabled)
     if audio_response:
-        emit("audio_done", {"status": "completed"})
+        emit("audio_done", {"status": "completed", "request_id": current_id})
 
     # E. Summary
     summ = target_data.get("summary", {})
     if summ.get("title") or summ.get("body"):
-        emit("summary", {"title": summ.get("title", ""), "body": summ.get("body", [])})
-
+        emit("summary", {"title": summ.get("title", ""), "body": summ.get("body", []), "request_id": current_id})
     socketio.sleep(0.3)
     # F. Summary Image
     summ_img = target_data.get("summary_image", {})
     if summ_img.get("image_id"):
         emit("summary_image", {
             "image_id": summ_img.get("image_id"),
-            "caption": summ_img.get("caption", "")
+            "caption": summ_img.get("caption", ""),
+            "request_id": current_id
         })
 
     socketio.sleep(10)
@@ -402,10 +408,11 @@ def handle_default_ask(data):
              emit("object", {
                 "object": obj_data.get("object"),
                 "text": obj_data.get("text", ""),
-                "speech": obj_data.get("speech", "")
+                "speech": obj_data.get("speech", ""),
+                "request_id": current_id
             })
         
-        emit("objects_done", {"status": "completed"})
+        emit("objects_done", {"status": "completed", "request_id": current_id})
 
 
 @socketio.on("log")
@@ -497,7 +504,7 @@ def run_object_generation(sid, obj_blueprint_text, obj_presentation_text, langua
             )
         except requests.exceptions.RequestException as e:
             logger.error("txt2img_connection_failed", error=str(e))
-            socketio.emit("objects_done", {"status": "completed"}, to=sid)
+            socketio.emit("objects_done", {"status": "completed", "request_id": ctx.get("request_id")}, to=sid)
             return
 
         if txt2img_response.status_code == 200:
@@ -512,7 +519,7 @@ def run_object_generation(sid, obj_blueprint_text, obj_presentation_text, langua
                 )
             except requests.exceptions.RequestException as e:
                 logger.error("img2obj_connection_failed", error=str(e))
-                socketio.emit("objects_done", {"status": "completed"}, to=sid)
+                socketio.emit("objects_done", {"status": "completed", "request_id": ctx.get("request_id")}, to=sid)
                 return
 
             if img2obj_response.status_code == 200:
@@ -520,7 +527,8 @@ def run_object_generation(sid, obj_blueprint_text, obj_presentation_text, langua
                 socketio.emit("object", {
                     "object": obj_filename,
                     "text": obj_presentation_text,
-                    "speech": obj_presentation_audio
+                    "speech": obj_presentation_audio,
+                    "request_id": ctx.get("request_id")
                 }, to=sid)
             else:
                 logger.error("img2obj_error_status", status=img2obj_response.status_code)
@@ -530,7 +538,7 @@ def run_object_generation(sid, obj_blueprint_text, obj_presentation_text, langua
     except Exception as e:
         logger.error("generation_pipeline_crashed", error=str(e))
 
-    socketio.emit("objects_done", {"status": "completed"}, to=sid)
+    socketio.emit("objects_done", {"status": "completed", "request_id": ctx.get("request_id")}, to=sid)
 
 
 @socketio.on("pdf_selected")
