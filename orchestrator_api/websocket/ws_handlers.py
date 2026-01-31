@@ -97,7 +97,6 @@ def on_disconnect():
 
 @socketio.on("ask")
 def handle_ask(data):
-    rid = str(uuid.uuid4())
     sid = request.sid
     session_id = _get_session_id_from_ws(sid, data)
 
@@ -105,20 +104,15 @@ def handle_ask(data):
     structlog.contextvars.bind_contextvars(
         connection="websocket",
         session_id=session_id,
-        rid=rid,
         ws_event="ask",
     )
     worker_ctx = {
         "session_id": session_id,
-        "rid": rid,
         "request_id": data.get("request_id", -1)
     }
     context = structlog.contextvars.get_contextvars()
-    rid_ctx = context.get("rid")
     session_id_ctx = context.get("session_id")
     headers = {}
-    if rid_ctx:
-        headers["X-Request-ID"] = rid_ctx
     if session_id_ctx:
         headers["X-Session-ID"] = session_id_ctx
 
@@ -179,7 +173,6 @@ def handle_ask(data):
                         "audio_synthesis_failed",
                         error=str(e),
                         session_id=ctx.get("session_id"),
-                        rid=ctx.get("rid"),
                         ws_event="audio_worker",
                     )
 
@@ -430,13 +423,10 @@ def handle_log_batch(data):
         emit("log_batch_ack", {"type": "log_batch_ack", "session_id": None, "acked_to_seq": 0, "ok": False}, to=sid)
         return
 
-    rid = str(uuid.uuid4())
-
     structlog.contextvars.clear_contextvars()
     structlog.contextvars.bind_contextvars(
         connection="websocket",
         session_id=session_id,
-        rid=rid,
         user_id=data.get("user_id"),
         condition=data.get("condition"),
         ws_event="log_batch",
@@ -474,7 +464,6 @@ def handle_log_batch(data):
             "type": "log_batch_ack",
             "session_id": session_id,
             "acked_to_seq": acked_to_seq,
-            "rid": rid,
             "ok": True
         }, to=sid)
 
@@ -484,7 +473,6 @@ def handle_log_batch(data):
             "type": "log_batch_ack",
             "session_id": session_id,
             "acked_to_seq": 0,
-            "rid": rid,
             "ok": False
         }, to=sid)
 

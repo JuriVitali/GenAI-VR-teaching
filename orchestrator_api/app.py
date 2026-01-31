@@ -30,12 +30,10 @@ def create_app():
 
     @app.before_request
     def start_trace():
-        rid = request.headers.get("X-Request-ID", str(uuid.uuid4()))
         session_id = request.headers.get("X-Session-ID")
 
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(
-            rid=rid,
             session_id=session_id,
         )
 
