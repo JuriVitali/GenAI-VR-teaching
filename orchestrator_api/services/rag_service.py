@@ -113,8 +113,6 @@ class RagService:
             elapsed = (t_end - t_start) * 1000
             print(f"\n[TIMER] Intent Classification took: {elapsed:.2f} ms")
             
-            # Invoca l'LLM
-            response = self.router_model.invoke(prompt)
             content = response.content
 
             # Parsa il JSON

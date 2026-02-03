@@ -216,3 +216,6 @@ logs/
 # generated_content
 *.png
 *.glb
+
+#tests
+tests/
