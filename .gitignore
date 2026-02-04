@@ -214,8 +214,10 @@ __marimo__/
 logs/
 
 # generated_content
-*.png
-*.glb
+shared/generated_assets/images_obj/
+shared/generated_assets/objects/
+shared/generated_assets/renders/
+shared/generated_assets/summary_images/
 
 #tests
 tests/
