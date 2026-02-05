@@ -17,6 +17,8 @@ from shared.utils import log_event
 from services.rag_singleton import rag_manager
 from services.memory_service import get_chat_history, update_chat_history
 from langchain_core.messages import HumanMessage, SystemMessage
+from langdetect import detect, DetectorFactory
+DetectorFactory.seed = 0
 
 # Load environment variables
 load_dotenv(find_dotenv())
@@ -41,6 +43,8 @@ def transcribe_audio(audio_path):
     os.remove(audio_path)
     return result["text"], language
 
+def detect_language(text_input):
+    return detect(text_input)
 
 @log_event("text_answer_generation")
 def stream_text_answer_by_sentence(question: str, language: str, pdf_name: str | None, session_id: str):
