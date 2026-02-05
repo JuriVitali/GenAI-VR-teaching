@@ -20,6 +20,7 @@ from services.object_extraction_service import extract_prompts, improve_prompt
 from queue import Queue
 from pathlib import Path
 from shared.log_merger import merge_and_cleanup_session_logs
+from services.memory_service import update_chat_history
 import time
 
 SID_TO_SESSION_ID = {}
@@ -316,6 +317,7 @@ def handle_default_ask(data):
     audio_response = data.get("audio_response", True)
     objects_enabled = data.get("objects", False)
     request_id = data.get("request_id", -1)
+    session_id = data.get("session_id")
     is_object_explanation = data.get("is_object", False)
 
     # 2. Validation
@@ -326,6 +328,10 @@ def handle_default_ask(data):
 
     if question_id is None:
         emit("error", {"message": "Missing question_id."}, to=sid)
+        return
+    
+    if session_id is None:
+        emit("error", {"message": "Missing session_id."}, to=sid)
         return
 
     # 3. Retrieve Data from JSON
@@ -416,6 +422,11 @@ def handle_default_ask(data):
             })
         
         emit("objects_done", {"status": "completed", "request_id": request_id})
+
+    # H. Update chat history
+    user_question = target_data.get("text_question", "")
+    avatar_response = target_data.get("text_response", "")
+    update_chat_history(session_id, user_question, avatar_response)
 
 
 @socketio.on("log")

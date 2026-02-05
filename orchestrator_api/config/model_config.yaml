@@ -59,33 +59,31 @@ tutor:
     - Use exactly the "*" symbol for each point. Don't use "*" for markdown.
     - Language: {language}.
 
-    **IMAGE BLUEPRINT**
-    - Describe the *content* of a 2D educational illustration.
-    - Focus on the *subject*, *action*, and *state*.
-    - Specify if it should be a diagram, a cross-section, or a historical scene.
-    - Do not describe art style. Focus on *accuracy*.
+    **3. IMAGE BLUEPRINT**
+    - Describe the VISUAL CONTENT of a 2D educational illustration.
+    - **RULE - NO SPLIT SCREENS:** Do NOT generate split-screens (e.g., Old vs New) unless the User Question explicitly asks for a comparison. Default to a single, immersive scene.
+    - **RULE - NO CHARTS/GRAPHS:** Do NOT describe bar charts, pie charts, graphs, or infographics with text. Use realistic representations only.
+    - **RULE - NO TEXT:** Do NOT ask for labels, arrows with text, or descriptions inside the image.
+    - **SPECIFICITY:** Be precise. Instead of "A planet", say "A gas giant with swirling storms". Instead of "A car", say "A 1886 Benz Patent-Motorwagen".
     - Language: English.
 
-    **IMAGE CAPTION**
-    - Write a concise, informative figure legend for the image described above.
-    - Length: Maximum 1 sentence (approx. 10-15 words).
-    - Style: Neutral, educational (like a textbook caption).
+    **4. IMAGE CAPTION**
+    - A concise figure legend explaining the image (max 15 words).
     - Language: {language}.
 
-    **3D OBJECT BLUEPRINT** (Input for Trellis)
-    - Identify a SINGLE, STATIC physical object.
-    - **CRITICAL:** Trellis cannot generate scenes. You must describe an isolated "asset" or "prop".
-    - You must explicitly include the keywords: "Isolated on white background", "3D asset view", "Neutral lighting".
+    **5. 3D OBJECT BLUEPRINT**
+    - Identify a SINGLE, SOLID physical object related to the topic.
+    - **CRITICAL CONSTRAINTS FOR 3D GENERATION:**
+      1. **REALISM OVER TOYS:** Describe the ACTUAL object (e.g., "A real human heart", "A vintage steel locomotive"), NOT a "model", "toy", or "miniature".
+      2. **NO SCENES:** Do not describe landscapes, tracks, rooms, skies, or solar systems. Only ONE isolated object.
+      3. **NO TRANSPARENCY/FLUIDS:** Do NOT describe glass, water, fire, smoke, or clear plastic. Use solid materials like Wood, Metal, Stone, Opaque Plastic, or Organic Tissue.
+      4. **NO FLAT OBJECTS:** Do not describe paper maps, flags, or charts.
+      5. **CONTEXTUAL SPECIFICITY:**
+        - **If History:** Specify era and material (e.g., "A 19th-century telegraph key made of brass and wood").
+        - **If Anatomy/Biology:** Specify organic texture (e.g., "A human heart with matte organic texture").
+        - **If Astronomy:** Specify surface details (e.g., "A cratered spherical asteroid").
+    - **Use exactly this phrasing for the view/lighting:** "Professional studio photography of [subject], shot from a high-angle three-quarter view (45 degrees) to reveal depth and volume. Soft directional lighting creating subtle shadows to define shape, volumetric form, sharp focus, 8k, highly detailed, solid white background, uncropped, distinct separation from background."
     - Language: English.
-    - Example: "A single ancient Greek amphora, isolated on white background, archaeological artifact style."
-
-    **3D OBJECT PRESENTATION**
-    - Write exactly ONE spoken sentence.
-    - The Avatar should acknowledge the object appearing in the VR space.
-    - Start with phrases like "Here is...", "I have projected...", or "Take a look at this...".
-    - Connect the object to the concept just explained.
-    - Format: Plain text only (no markdown, no bullets).
-    - Language: Answer in the exact same language used in the user's question.
 
     ### DATA SOURCE
     [CONTEXT]
@@ -96,6 +94,7 @@ tutor:
     (Write the speech text here)
 
     **SUMMARY**
+    (Write the title here)
     * (Point 1)
     * (Point 2)
     * (Point 3)
