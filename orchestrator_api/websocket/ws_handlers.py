@@ -10,6 +10,7 @@ import json
 from services.frontend_log_service import save_log_batch
 from app import socketio
 from services.answer_service import (
+    detect_language,
     stream_text_answer_by_sentence,
     synthesize_wav,
     transcribe_audio
@@ -131,18 +132,24 @@ def handle_ask(data):
         if st != "ready":
             emit("error", {"message": f"PDF not ready: {st}. Please wait."}, to=sid)
             return
+        
         request_id = data.get("request_id", -1)
+        question_format = data.get("question_format", "audio")
         audio_response = data.get("audio_response", True)
         object_gen = int(data.get("objects", 0))
-        audio_b64 = data.get("audio_question")
-        audio_bytes = base64.b64decode(audio_b64)
         max_objects = data.get("max_objects", 1)
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-            tmp.write(audio_bytes)
-            tmp_path = tmp.name
-
-        transcription, language = transcribe_audio(tmp_path)
+        
+        if question_format == "audio":        
+            audio_b64 = data.get("audio_question")
+            audio_bytes = base64.b64decode(audio_b64)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                tmp.write(audio_bytes)
+                tmp_path = tmp.name
+            text_question, language = transcribe_audio(tmp_path)
+        else:
+            text_question = data.get("text_question")
+            language = detect_language(text_question)
+        
         emit("language_detected", {"language": language})
 
         audio_queue = Queue()
@@ -200,7 +207,7 @@ def handle_ask(data):
             obj_presentation_text = None
 
             # --- STREAM LOOP ---
-            for text_content, message_type in stream_text_answer_by_sentence(transcription, language, pdf_name, sid):
+            for text_content, message_type in stream_text_answer_by_sentence(text_question, language, pdf_name, sid):
 
                 # 1. MAIN SPEECH (Immediate TTS)
                 if message_type == "speech":
