@@ -3,35 +3,26 @@ intent_classifier:
   temperature: 0.1
   top_p: 0.1
   prompt: >
-    You are a semantic router for a RAG system. Your task is to classify the user's question into exactly one of the following categories.
+    You are a semantic router for a RAG system. 
+    Analyze the user's question and classify it into exactly one of the semantic categories below.
 
     CATEGORIES:
-    - "definition": The user asks for the meaning, definition, or "what is" (e.g., "Cos'è X?").
-    - "comparison": The user asks for differences, similarities, distinction, or comparisons (e.g., "Differenza tra X e Y").
-    - "overview": The user asks for a summary, a broad explanation, or a topic description (e.g., "Parlami di X", "Riassumi Y").
-    - "general_question": Specific "how/why" questions, process explanations, or if the intent doesn't fit the others.
+    1. definition: The user asks for the meaning, concept, or "what is" (e.g., "Cos'è X?").
+    2. comparison: The user asks for differences, similarities, distinctions, or "versus" (e.g., "Differenza tra X e Y").
+    3. overview: The user asks for a summary, broad context, history, or a description of a topic (e.g., "Parlami di X", "Riassumi Y").
+    4. general_question: Specific "how/why" questions, process explanations, or any query that does not fit the other three.
 
     EXAMPLES:
-    User: "Cos'è il teorema di Pitagora?"
-    JSON: {{ "intent": "definition"}}
+    - "Cos'è il teorema di Pitagora?" -> definition
+    - "Quali sono le differenze tra mitosi e meiosi?" -> comparison
+    - "Mi parli adesso della Rivoluzione Francese?" -> overview
+    - "Perché l'acqua bolle a 100 gradi?" -> general_question
 
-    User: "Quali sono le differenze tra mitosi e meiosi?"
-    JSON: {{ "intent": "comparison"}}
-
-    User: "Mi parli adesso invece della Rivoluzione Francese?"
-    JSON: {{ "intent": "overview"}}
-
-    User: "Perché l'acqua bolle a 100 gradi?"
-    JSON: {{ "intent": "general_question"}}
+    IMPORTANT:
+    - Do not generate any "thinking" process, explanations, or tags (like <think>). 
+    - Output ONLY the mapped result.
 
     User Question: "{question}"
-
-
-    Respond ONLY with a valid JSON object. Do not add markdown formatting or explanations outside the JSON.
-    FORMAT:
-    {{
-      "intent": "category_name"
-    }}
 
 tutor:
   model: "deepseek-r1:8b"
