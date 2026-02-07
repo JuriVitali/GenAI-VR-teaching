@@ -13,7 +13,8 @@ from services.answer_service import (
     detect_language,
     stream_text_answer_by_sentence,
     synthesize_wav,
-    transcribe_audio
+    transcribe_audio,
+    retrieve_context
 )
 import structlog
 from dotenv import load_dotenv, find_dotenv
@@ -190,29 +191,24 @@ def handle_ask(data):
                 socketio.sleep(0)
                 audio_queue.task_done()
 
-
         socketio.start_background_task(audio_worker, sid, worker_ctx)
 
         try:
-            full_answer = []
+            text_answer = []
             summary_title = ""
             summary_bullets = []
 
             is_negative_answer = False
-            
-            # New containers for multimedia assets
-            summary_img_blueprint_text = None
-            summary_img_caption = None
-            obj_blueprint_text = None
-            obj_presentation_text = None
+
+            answer_context, sources = retrieve_context(text_question, pdf_name)
 
             # --- STREAM LOOP ---
-            for text_content, message_type in stream_text_answer_by_sentence(text_question, language, pdf_name, sid):
+            for text_content, message_type in stream_text_answer_by_sentence(text_question, language, pdf_name, sid, answer_context):
 
                 # 1. MAIN SPEECH (Immediate TTS)
                 if message_type == "speech":
                     emit("text_chunk", {"text": text_content, "request_id": request_id})
-                    full_answer.append(text_content)
+                    text_answer.append(text_content)
                     
                     if audio_response:
                         audio_queue.put(text_content)
@@ -222,18 +218,6 @@ def handle_ask(data):
                     summary_title = text_content
                 elif message_type == "bullet":
                     summary_bullets.append(text_content)
-                
-                # 3. IMAGE ASSETS (Collect)
-                elif message_type == "image_blueprint":
-                    summary_img_blueprint_text = text_content
-                elif message_type == "image_caption":
-                    summary_img_caption = text_content
-
-                # 4. 3D OBJECT ASSETS (Collect)
-                elif message_type == "3d_blueprint":
-                    obj_blueprint_text = text_content
-                elif message_type == "3d_speech":
-                    obj_presentation_text = text_content
 
                 # Keep connection alive
                 socketio.sleep(0)
@@ -241,7 +225,7 @@ def handle_ask(data):
                 # --- NEGATIVE ANSWER CHECK ---
                 # Check only if we haven't flagged it yet
                 if not is_negative_answer:
-                    current_full_text = " ".join(full_answer).lower()
+                    current_full_text = " ".join(text_answer).lower()
                     negative_triggers = [
                         "mi dispiace", "non ho trovato", "non è possibile trovare", 
                         "non dispongo di informazioni", "i cannot find the answer",
@@ -254,6 +238,10 @@ def handle_ask(data):
                         logger.info("[FLAG] Negative answer detected. Will skip assets at the end.")
                         is_negative_answer = True
                     
+            # Final Logging
+            full_text_answer = " ".join(text_answer)
+            logger.info("tutor_answer", full_text_answer=full_text_answer)
+            emit("text_done", {"status": "completed", "request_id": request_id})
 
             # --- POST-STREAM PROCESSING ---
             if is_negative_answer:
@@ -261,50 +249,43 @@ def handle_ask(data):
                 # Avvisiamo il frontend che non arriveranno oggetti
                 socketio.emit("objects_done", {"status": "skipped", "request_id": request_id}, to=sid)
             else:
-                # 1. Send Summary to UI
+                # Send Summary to UI
                 if summary_title or summary_bullets:
-                    # Note: You might want to include the caption here if your UI expects it immediately
                     emit("summary", {
                         "title": summary_title, 
                         "body": summary_bullets,
                         "request_id": request_id
                     })
 
-                # 2. Trigger Image Generation (Steps 4-5)
-                if summary_img_blueprint_text:
-                    summary_img_prompt = improve_prompt(summary_img_blueprint_text)
+                # img and obj extraction
+                obj_extracted, summary_img_extracted = extract_prompts(text_question, full_text_answer, answer_context, language)
+                # img prompt improvement
+                summary_img_prompt = improve_prompt(summary_img_extracted.prompt)
                     
-                    try:
-                        txt2img_response = requests.post(
-                            TEXT_TO_IMAGE_URL,
-                            json={"prompt": summary_img_prompt, "summary": "true"},
-                            headers=headers,
-                            timeout=20
-                        )
-                        if txt2img_response.status_code == 200:
-                            emit("summary_image", {
-                                "image_id": txt2img_response.json().get("image_id"),
-                                "caption": summary_img_caption,
-                                "request_id": request_id
-                            })
-                        else:
-                            logger.error("txt2img_error", status=txt2img_response.status_code)
+                try:
+                    txt2img_response = requests.post(
+                        TEXT_TO_IMAGE_URL,
+                        json={"prompt": summary_img_prompt, "summary": "true"},
+                        headers=headers,
+                        timeout=20
+                    )
+                    if txt2img_response.status_code == 200:
+                        emit("summary_image", {
+                            "image_id": txt2img_response.json().get("image_id"),
+                            "caption": summary_img_extracted.caption,
+                            "request_id": request_id
+                        })
+                    else:
+                        logger.error("txt2img_error", status=txt2img_response.status_code)
 
-                    except requests.exceptions.RequestException as e:
-                        logger.error("txt2img_connection_failed", error=str(e))
+                except requests.exceptions.RequestException as e:
+                    logger.error("txt2img_connection_failed", error=str(e))
 
                 # 3. Trigger 3D Object Generation (Step 6)
-                if (object_gen and obj_blueprint_text):
-                    # TODO: Adjust this part using the previous variables
-                    if object_gen:
-                        socketio.start_background_task(
-                            run_object_generation, sid, obj_blueprint_text, obj_presentation_text, language, headers, worker_ctx
-                        )
-
-            # Final Logging
-            answer_text = " ".join(full_answer)
-            logger.info("tutor_answer", full_text_answer=answer_text)
-            emit("text_done", {"status": "completed", "request_id": request_id})
+                if (object_gen):
+                    socketio.start_background_task(
+                        run_object_generation, sid, obj_extracted.prompt, obj_extracted.presentation_speech, language, headers, worker_ctx
+                    )
 
         finally:
             # Clean up: Tell the worker to stop after the queue is empty

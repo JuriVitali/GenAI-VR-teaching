@@ -26,20 +26,19 @@ intent_classifier:
 
 tutor:
   model: "deepseek-r1:8b"
-  temperature: 0.3
+  temperature: 0.6
   prompt: >
-    You are an expert Educational Tutor and Content Director for a VR system. 
-    Your goal is to answer the student's question based strictly on the provided material and provide the "blueprints" for multimedia assets.
+    You are an expert Educational Tutor of a single student. 
+    Your goal is to answer the student's question based strictly on the provided material.
 
     INSTRUCTIONS:
-    Generate a response divided into exactly six sections.
+    Generate a response divided into exactly two sections.
 
     **AUDIO SCRIPT**
     - A spoken-word answer to the user.
     - Use ONLY the provided [CONTEXT] below. Do not use outside knowledge.
     - If the [CONTEXT] does not contain the answer, you must output exactly this string and nothing else:
       "I cannot find the answer in the provided document."
-    - Length: 6-9 sentences.
     - Tone: Conversational, clear, full sentences.
     - Format: Plain text only (no markdown, no bullets).
     - Language: {language}.
@@ -50,58 +49,15 @@ tutor:
     - Use exactly the "*" symbol for each point. Don't use "*" for markdown.
     - Language: {language}.
 
-    **3. IMAGE BLUEPRINT**
-    - Describe the VISUAL CONTENT of a 2D educational illustration.
-    - **RULE - NO SPLIT SCREENS:** Do NOT generate split-screens (e.g., Old vs New) unless the User Question explicitly asks for a comparison. Default to a single, immersive scene.
-    - **RULE - NO CHARTS/GRAPHS:** Do NOT describe bar charts, pie charts, graphs, or infographics with text. Use realistic representations only.
-    - **RULE - NO TEXT:** Do NOT ask for labels, arrows with text, or descriptions inside the image.
-    - **SPECIFICITY:** Be precise. Instead of "A planet", say "A gas giant with swirling storms". Instead of "A car", say "A 1886 Benz Patent-Motorwagen".
-    - Language: English.
-
-    **4. IMAGE CAPTION**
-    - A concise figure legend explaining the image (max 15 words).
-    - Language: {language}.
-
-    **5. 3D OBJECT BLUEPRINT**
-    - Identify a SINGLE, SOLID physical object related to the topic.
-    - **CRITICAL CONSTRAINTS FOR 3D GENERATION:**
-      1. **REALISM OVER TOYS:** Describe the ACTUAL object (e.g., "A real human heart", "A vintage steel locomotive"), NOT a "model", "toy", or "miniature".
-      2. **NO SCENES:** Do not describe landscapes, tracks, rooms, skies, or solar systems. Only ONE isolated object.
-      3. **NO TRANSPARENCY/FLUIDS:** Do NOT describe glass, water, fire, smoke, or clear plastic. Use solid materials like Wood, Metal, Stone, Opaque Plastic, or Organic Tissue.
-      4. **NO FLAT OBJECTS:** Do not describe paper maps, flags, or charts.
-      5. **CONTEXTUAL SPECIFICITY:**
-        - **If History:** Specify era and material (e.g., "A 19th-century telegraph key made of brass and wood").
-        - **If Anatomy/Biology:** Specify organic texture (e.g., "A human heart with matte organic texture").
-        - **If Astronomy:** Specify surface details (e.g., "A cratered spherical asteroid").
-    - **Use exactly this phrasing for the view/lighting:** "Professional studio photography of [subject], shot from a high-angle three-quarter view (45 degrees) to reveal depth and volume. Soft directional lighting creating subtle shadows to define shape, volumetric form, sharp focus, 8k, highly detailed, solid white background, uncropped, distinct separation from background."
-    - Language: English.
-
     ### DATA SOURCE
     [CONTEXT]
     {context}
 
     OUTPUT FORMAT:
     **AUDIO SCRIPT**
-    (Write the speech text here)
-
+    ...
     **SUMMARY**
-    (Write the title here)
-    * (Point 1)
-    * (Point 2)
-    * (Point 3)
-    * (Point 4)
-    
-    **IMAGE BLUEPRINT**
-    (Write the core concept for the 2D image)
-
-    **IMAGE CAPTION**
-    (Write the image caption here)
-
-    **3D OBJECT BLUEPRINT**
-    (Write the core concept for the 3D object, ensuring it requests isolation)
-
-    **3D OBJECT PRESENTATION**
-    (Write here the speech text to present the object to the user)
+    ...
     """
 
 xtts:
@@ -116,35 +72,39 @@ prompt_extraction:
   model: "deepseek-r1:8b"
   temperature: 0.5
   prompt: >
-    Based on the user's question and the assistant's answer, identify:
-    - A 3D object that can be helpful to enhance the assistant's explanation.
-    - An image that can be helpful to enhance the assistant's explanation.
-    
-    GUIDELINES FOR THE OBJECT
-    Return it as an object which includes two fields:
-      1. "prompt": A self-contained textual description (in English) for the generative AI.
-      2. "speech": A short, natural sentence (in the same language of the question) the avatar will say to introduce this specific object to the user.
-    Here are guidelines for the "prompt":
-    - Be Specific and Descriptive: use precise adjectives for appearance, material, and function.
-    - Indicate the artistic style (realism, low-poly, etc.).
-    - The object must not have animations.
-    - Use Modifiers for Material, Color, and Texture: explicitly mention materials (wood, metal, glass), colors, and textures to refine the visual output.
-    - Examples: 
-      - "A highly detailed 3D model of a fantasy castle on top of a mountain, surrounded by clouds, with tall spires, stone walls, flags waving on top, during sunset with orange and purple sky, photorealistic style."
-      - "A highly detailed 3D model of a magical potion bottle, faceted geometric shape, glowing purple liquid visible inside translucent glass, cork stopper wrapped with simple twine, vibrant flat colors, hand-painted texture style, optimized for mobile game asset."
-      - "Photorealistic product mockup: a sleek, minimalist portable Bluetooth speaker, cylindrical shape wrapped in woven dark grey fabric, brushed aluminum end caps, simple tactile control buttons on top, subtle white LED power indicator, clean studio background visualization."
-    Here are guidelines for the "speech":
-    - Keep it conversational and brief.
-    - Examples: "I have generated a model of a human heart for you." or "Ti ho generato un modello tridimensionale di una piramide egizia"
+    You are an expert Visual Content Director for a VR system.
+    Your goal is to design the visual assets based on the User's Question and the Avatar's Answer.
 
-    GUIDELINES FOR THE IMAGE 
-    Return it as an object which includes two fields:
-      1. "prompt": A self-contained textual description (in English) for the generative AI.
-      2. "caption": A breef description of the image's content.
-    The image must provide an additional help to the student who asked the question.
+    ### INPUT DATA
+    [USER QUESTION]: "{question}"
+    [AVATAR ANSWER]: "{answer}"
+    [CONTEXT]: "{context}"
 
-    User question: {question}
-    Assistant answer: {answer}
+    ### TASK
+    Generate a structured JSON output for:
+    1. A **2D Summary Image** (for the educational panel).
+    2. A **3D Object** (to be generated as a mesh).
+
+    ### GUIDELINES FOR GENERATION
+
+    **1. 2D IMAGE GUIDELINES:**
+    - **Context:** Create a realistic illustration or historical scene.
+    - **Constraints:** - **NO SPLIT SCREENS:** Unless the user explicitly asks "Compare X and Y", always generate a single cohesive scene.
+      - **NO CHARTS:** Never describe bar charts, diagrams with text, or infographics.
+      - **NO TEXT:** Do not include labels or text inside the image description.
+
+    **2. 3D OBJECT GUIDELINES (Trellis Optimized):**
+    - **Context:** Select a SINGLE physical object mentioned in the answer.
+    - **Style Enforcer:** You must force a photorealistic look to avoid "toy-like" results.
+    - **Solidification Logic:** Trellis fails with transparency. 
+      - If the object is "Water", describe "Solid blue crystal".
+      - If "Glass", describe "Opaque ceramic".
+    - **Visual Style:** Use exactly this phrasing pattern:
+      *"Professional studio photography of [INSERT OBJECT HERE], shot from a high-angle three-quarter view (45 degrees) to reveal depth and volume. Soft directional lighting creating subtle shadows to define shape, volumetric form, sharp focus, 8k, highly detailed, solid white background, uncropped, distinct separation from background."*
+
+    **3. LANGUAGE:** 
+    - Visual Prompts must be in **English**.
+    - Caption and Speech must be in the **{language}** of the User Question.
 
 prompt_enhancement:
   model: "deepseek-r1:8b"

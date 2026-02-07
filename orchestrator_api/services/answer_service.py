@@ -46,23 +46,22 @@ def transcribe_audio(audio_path):
 def detect_language(text_input):
     return detect(text_input)
 
+def retrieve_context(question: str, pdf_name: str):
+    try:
+        # Retrieve context
+        context, sources = rag_manager.retrieve_context(pdf_name, question, k=5)
+        structlog.contextvars.bind_contextvars(rag_sources=sources, rag_pdf=pdf_name)
+    except Exception as e:
+        logger.error(f"RAG Retrieval failed: {e}")
+        structlog.contextvars.bind_contextvars(rag_pdf=pdf_name, rag_error="retrieve_failed")
+        context, sources = "", []
+    finally:
+        return context, sources
+
 @log_event("text_answer_generation")
-def stream_text_answer_by_sentence(question: str, language: str, pdf_name: str | None, session_id: str):
+def stream_text_answer_by_sentence(question: str, language: str, pdf_name: str , session_id: str, context):
     structlog.contextvars.bind_contextvars(question=question)
-
-    context, sources = "", []
-    if pdf_name:
-        try:
-            # Retrieve context
-            context, sources = rag_manager.retrieve_context(pdf_name, question, k=5)
-            structlog.contextvars.bind_contextvars(rag_sources=sources, rag_pdf=pdf_name)
-        except Exception as e:
-            logger.error(f"RAG Retrieval failed: {e}")
-            structlog.contextvars.bind_contextvars(rag_pdf=pdf_name, rag_error="retrieve_failed")
-            context, sources = "", []
     
-    print(f"\n[DEBUG] Prompt sent to LLM. Context len: {len(context)} chars. Waiting for stream...\n")
-
     # Construct the Message List
     system_text = tutor_config["prompt"].format(context=context, language=language)
     
@@ -81,11 +80,7 @@ def stream_text_answer_by_sentence(question: str, language: str, pdf_name: str |
     # The 'type' is the label yielded to the frontend/system.
     SECTION_MAP = {
         "**AUDIO SCRIPT**": "speech",
-        "**SUMMARY**": "summary",
-        "**IMAGE BLUEPRINT**": "image_blueprint",
-        "**IMAGE CAPTION**": "image_caption",
-        "**3D OBJECT BLUEPRINT**": "3d_blueprint",
-        "**3D OBJECT PRESENTATION**": "3d_speech"
+        "**SUMMARY**": "summary"
     }
     
     # Create an ordered list of markers for detection
@@ -111,7 +106,7 @@ def stream_text_answer_by_sentence(question: str, language: str, pdf_name: str |
         yielded_items = []
 
         # 1. AUDIO SCRIPT or 3D PRESENTATION (Speech Logic)
-        if section_type in ["speech", "3d_speech"]:
+        if section_type == "speech":
             sentences = re.split(r'([.!?])', content)
             limit = len(sentences) if is_final_flush else len(sentences) - 1
             
@@ -137,11 +132,11 @@ def stream_text_answer_by_sentence(question: str, language: str, pdf_name: str |
                 if not line: continue
                 
                 if not found_summary_title:
-                    clean_title = line.strip("*# ").strip()
+                    clean_title = line.replace('*', '').strip("# ").strip()
                     yielded_items.append((clean_title, "title"))
                     found_summary_title = True
                 else:
-                    clean_bullet = line.lstrip("* ").strip()
+                    clean_bullet = line.replace('*', '').strip()
                     if clean_bullet:
                         yielded_items.append((clean_bullet, "bullet"))
             
@@ -149,16 +144,6 @@ def stream_text_answer_by_sentence(question: str, language: str, pdf_name: str |
             if not is_final_flush:
                 leftover = lines[-1]
             return yielded_items, leftover
-
-        # 3. BLUEPRINTS & CAPTIONS (Whole Block Logic)
-        else:
-            if is_final_flush:
-                clean_text = content.strip()
-                if clean_text:
-                    yielded_items.append((clean_text, section_type))
-                return yielded_items, ""
-            else:
-                return yielded_items, content
 
     # --- STREAMING LOOP ---
     for chunk in question_answerer_model.stream(messages):
