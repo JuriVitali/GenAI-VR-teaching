@@ -14,55 +14,78 @@ prompt_extraction_model = get_llm_model(prompt_extraction_config["model"], promp
 
 # --- OUTPUT DATA STRUCTURES ---
 
-class Summary_img(BaseModel):
+# --- 2D IMAGE ASSET ---
+class VisualAsset2D(BaseModel):
     prompt: str = Field(
         ..., 
-        description="The detailed textual description used to generate image."
+        description=(
+            "The prompt for a text-to-image model. "
+            "Describe a realistic, immersive educational scene or close-up. "
+            "CRITICAL RULES: 1. NO SPLIT SCREENS (old vs new). 2. NO CHARTS/GRAPHS/TEXT. "
+            "3. If vague, add historical/material details (e.g., '1920s wooden radio')."
+        )
     )
     caption: str = Field(
         ..., 
-        description="A brief description of the image."
-    )
-    
-class Obj(BaseModel):
-    prompt: str = Field(
-        ..., 
-        description="The detailed textual description used to generate the 3D object."
-    )
-    speech: str = Field(
-        ..., 
-        description="The sentence the avatar will say to the user when presenting this specific object."
+        description="A concise figure legend explaining the image (max 15 words). Language: Target Language."
     )
 
-class SceneItem(BaseModel):
-    obj: Obj = Field(
+# --- 3D OBJECT ASSET ---
+class VisualAsset3D(BaseModel):
+    prompt: str = Field(
         ..., 
-        description="A 3D object to generate, including its visual prompt and avatar speech."
+        description=(
+            "The prompt for Trellis (Image-to-3D). "
+            "Describe a SINGLE, SOLID, OPAQUE object. "
+            "MANDATORY FORMAT: Start exactly with 'Professional studio photography of [Subject]...'. "
+            "CRITICAL RULES: 1. REALISM (No toys/models). 2. NO TRANSPARENCY (No glass/water/fire). "
+            "3. NO SCENES (Must be isolated on white). 4. VIEW: High-angle three-quarter view (45 degrees)."
+        )
     )
-    img: Summary_img = Field(
+    presentation_speech: str = Field(
         ..., 
-        description="An image to generate, including its visual prompt and its caption."
+        description="A single spoken sentence for the Avatar to introduce this object. Language: Target Language."
+    )
+
+# --- MAIN CONTAINER ---
+class SceneGeneration(BaseModel):
+    summary_image: VisualAsset2D = Field(
+        ..., 
+        description="The 2D illustration for the summary panel."
+    )
+    obj: VisualAsset3D = Field(
+        ..., 
+        description="The 3D object asset to be projected in VR."
     )
 
 # ---------------------------
 
-@log_event("prompt_generation", result_mapper=lambda x: {"obj_prompt": x[0].prompt, "obj_description": x[0].speech, "summary_img_prompt": x[1].prompt, "summary_img_caption": x[1].caption})
-def extract_prompts(question: str, answer: str) -> List[SceneItem]:
+@log_event("prompt_generation", result_mapper=lambda x: {"obj_prompt": x[0].prompt, "obj_description": x[0].presentation_speech, "summary_img_prompt": x[1].prompt, "summary_img_caption": x[1].caption})
+def extract_prompts(question: str, answer: str, context, language) -> SceneGeneration:
     """
-    Analyze the question and answer to identify ...
+    Analyzes the Q&A to generate visual assets using Pydantic structured output.
     """
+    # Bind context for logging
     structlog.contextvars.bind_contextvars(question=question, answer=answer)
-    # Format the prompt using the updated YAML config
-    prompt = prompt_extraction_config["prompt"].format(question=question, answer=answer)
     
-    structured_llm_json = prompt_extraction_model.with_structured_output(
-        SceneItem, 
-        method="json_schema"
+    # format the prompt template defined above
+    formatted_prompt = prompt_extraction_config["prompt"].format(
+        question=question, 
+        answer=answer, 
+        context=context,
+        language=language
     )
     
-    response = structured_llm_json.invoke(prompt)
+    # Configure the LLM with the new Pydantic schema
+    structured_llm = prompt_extraction_model.with_structured_output(
+        SceneGeneration, 
+        method="json_schema" # or "function_calling" depending on backend
+    )
+    
+    # Invoke
+    response = structured_llm.invoke(formatted_prompt)
 
-    return response.obj, response.img
+    return response.obj, response.summary_image
 
 @log_event("prompt_improvement")
 def improve_prompt(raw_prompt: str):

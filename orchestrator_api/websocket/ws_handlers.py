@@ -10,9 +10,11 @@ import json
 from services.frontend_log_service import save_log_batch
 from app import socketio
 from services.answer_service import (
+    detect_language,
     stream_text_answer_by_sentence,
     synthesize_wav,
-    transcribe_audio
+    transcribe_audio,
+    retrieve_context
 )
 import structlog
 from dotenv import load_dotenv, find_dotenv
@@ -20,6 +22,7 @@ from services.object_extraction_service import extract_prompts, improve_prompt
 from queue import Queue
 from pathlib import Path
 from shared.log_merger import merge_and_cleanup_session_logs
+from services.memory_service import update_chat_history
 import time
 
 SID_TO_SESSION_ID = {}
@@ -52,35 +55,38 @@ a = os.getenv("LOG_FILE_PATH")
 BACKEND_LOG_FILE_PATH = Path(a).absolute()
 
 # --- JSON PRE-GENERATION SETUP ---
-PRE_GENERATED_PATH = Path("shared/pre_generated")
-PRE_GENERATED_PATH.mkdir(parents=True, exist_ok=True)
+PRE_GEN_QUESTIONS_DIR = os.getenv("PRE_GEN_QUESTIONS_DIR")
+STARTING_OBJECTS_DIR = os.getenv("STARTING_OBJECTS_DIR")
 
-current_id= -1
-
-def _get_json_path(pdf_name):
-    # Sanitize pdf_name just in case
+def _get_json_path(pdf_name, base_dir):
+    if not base_dir:
+        return None
     safe_name = Path(pdf_name).stem
-    return PRE_GENERATED_PATH / f"{safe_name}.json"
+    return Path(base_dir).absolute() / f"{safe_name}.json"
 
 def _get_existing_questions(pdf_name):
-    """Retrieves a list of {id, text} for existing questions in the JSON file."""
-    file_path = _get_json_path(pdf_name)
-    questions = []
-    
-    if file_path.exists():
+    """Recupera le domande pre-generate."""
+    file_path = _get_json_path(pdf_name, PRE_GEN_QUESTIONS_DIR)
+    if file_path and file_path.exists():
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                # Extract only id and text_question for the frontend list
-                for item in data:
-                    questions.append({
-                        "id": item.get("question_id"),
-                        "text": item.get("text_question")
-                    })
+                return [{"id": item.get("question_id"), "text": item.get("text_question")} for item in data]
         except Exception as e:
             logger.error(f"Failed to load questions for {pdf_name}", error=str(e))
-    
-    return questions
+    return []
+
+def _get_starting_objects(pdf_name):
+    """Recupera gli oggetti iniziali."""
+    file_path = _get_json_path(pdf_name, STARTING_OBJECTS_DIR)
+    if file_path and file_path.exists():
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return [{"object_id": item.get("object"), "question_id": item.get("question_id")} for item in data]
+        except Exception as e:
+            logger.error(f"Failed to load starting objects for {pdf_name}", error=str(e))
+    return []
 
 @socketio.on('connect')
 def on_connect():
@@ -127,18 +133,24 @@ def handle_ask(data):
         if st != "ready":
             emit("error", {"message": f"PDF not ready: {st}. Please wait."}, to=sid)
             return
-        current_id = data.get("request_id", -1)
+        
+        request_id = data.get("request_id", -1)
+        question_format = data.get("question_format", "audio")
         audio_response = data.get("audio_response", True)
         object_gen = int(data.get("objects", 0))
-        audio_b64 = data.get("audio_question")
-        audio_bytes = base64.b64decode(audio_b64)
         max_objects = data.get("max_objects", 1)
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-            tmp.write(audio_bytes)
-            tmp_path = tmp.name
-
-        transcription, language = transcribe_audio(tmp_path)
+        
+        if question_format == "audio":        
+            audio_b64 = data.get("audio_question")
+            audio_bytes = base64.b64decode(audio_b64)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                tmp.write(audio_bytes)
+                tmp_path = tmp.name
+            text_question, language = transcribe_audio(tmp_path)
+        else:
+            text_question = data.get("text_question")
+            language = detect_language(text_question)
+        
         emit("language_detected", {"language": language})
 
         audio_queue = Queue()
@@ -148,7 +160,7 @@ def handle_ask(data):
             while True:
                 text_to_speak = audio_queue.get()
                 if text_to_speak is None:
-                    socketio.emit("audio_done", {"status": "completed", "request_id": current_id}, to=sid_local)
+                    socketio.emit("audio_done", {"status": "completed", "request_id": request_id}, to=sid_local)
                     break
 
                 try:
@@ -179,29 +191,24 @@ def handle_ask(data):
                 socketio.sleep(0)
                 audio_queue.task_done()
 
-
         socketio.start_background_task(audio_worker, sid, worker_ctx)
 
         try:
-            full_answer = []
+            text_answer = []
             summary_title = ""
             summary_bullets = []
 
             is_negative_answer = False
-            
-            # New containers for multimedia assets
-            summary_img_blueprint_text = None
-            summary_img_caption = None
-            obj_blueprint_text = None
-            obj_presentation_text = None
+
+            answer_context, sources = retrieve_context(text_question, pdf_name)
 
             # --- STREAM LOOP ---
-            for text_content, message_type in stream_text_answer_by_sentence(transcription, language, pdf_name, sid):
+            for text_content, message_type in stream_text_answer_by_sentence(text_question, language, pdf_name, sid, answer_context):
 
                 # 1. MAIN SPEECH (Immediate TTS)
                 if message_type == "speech":
-                    emit("text_chunk", {"text": text_content, "request_id": current_id})
-                    full_answer.append(text_content)
+                    emit("text_chunk", {"text": text_content, "request_id": request_id})
+                    text_answer.append(text_content)
                     
                     if audio_response:
                         audio_queue.put(text_content)
@@ -211,18 +218,6 @@ def handle_ask(data):
                     summary_title = text_content
                 elif message_type == "bullet":
                     summary_bullets.append(text_content)
-                
-                # 3. IMAGE ASSETS (Collect)
-                elif message_type == "image_blueprint":
-                    summary_img_blueprint_text = text_content
-                elif message_type == "image_caption":
-                    summary_img_caption = text_content
-
-                # 4. 3D OBJECT ASSETS (Collect)
-                elif message_type == "3d_blueprint":
-                    obj_blueprint_text = text_content
-                elif message_type == "3d_speech":
-                    obj_presentation_text = text_content
 
                 # Keep connection alive
                 socketio.sleep(0)
@@ -230,7 +225,7 @@ def handle_ask(data):
                 # --- NEGATIVE ANSWER CHECK ---
                 # Check only if we haven't flagged it yet
                 if not is_negative_answer:
-                    current_full_text = " ".join(full_answer).lower()
+                    current_full_text = " ".join(text_answer).lower()
                     negative_triggers = [
                         "mi dispiace", "non ho trovato", "non è possibile trovare", 
                         "non dispongo di informazioni", "i cannot find the answer",
@@ -243,57 +238,54 @@ def handle_ask(data):
                         logger.info("[FLAG] Negative answer detected. Will skip assets at the end.")
                         is_negative_answer = True
                     
+            # Final Logging
+            full_text_answer = " ".join(text_answer)
+            logger.info("tutor_answer", full_text_answer=full_text_answer)
+            emit("text_done", {"status": "completed", "request_id": request_id})
 
             # --- POST-STREAM PROCESSING ---
             if is_negative_answer:
                 logger.info("[SKIP] Asset generation skipped: Negative answer detected.")
                 # Avvisiamo il frontend che non arriveranno oggetti
-                socketio.emit("objects_done", {"status": "skipped", "request_id": current_id}, to=sid)
+                socketio.emit("objects_done", {"status": "skipped", "request_id": request_id}, to=sid)
             else:
-                # 1. Send Summary to UI
+                # Send Summary to UI
                 if summary_title or summary_bullets:
-                    # Note: You might want to include the caption here if your UI expects it immediately
                     emit("summary", {
                         "title": summary_title, 
                         "body": summary_bullets,
-                        "request_id": current_id
+                        "request_id": request_id
                     })
 
-                # 2. Trigger Image Generation (Steps 4-5)
-                if summary_img_blueprint_text:
-                    summary_img_prompt = improve_prompt(summary_img_blueprint_text)
+                # img and obj extraction
+                obj_extracted, summary_img_extracted = extract_prompts(text_question, full_text_answer, answer_context, language)
+                # img prompt improvement
+                summary_img_prompt = improve_prompt(summary_img_extracted.prompt)
                     
-                    try:
-                        txt2img_response = requests.post(
-                            TEXT_TO_IMAGE_URL,
-                            json={"prompt": summary_img_prompt, "summary": "true"},
-                            headers=headers,
-                            timeout=20
-                        )
-                        if txt2img_response.status_code == 200:
-                            emit("summary_image", {
-                                "image_id": txt2img_response.json().get("image_id"),
-                                "caption": summary_img_caption,
-                                "request_id": current_id
-                            })
-                        else:
-                            logger.error("txt2img_error", status=txt2img_response.status_code)
+                try:
+                    txt2img_response = requests.post(
+                        TEXT_TO_IMAGE_URL,
+                        json={"prompt": summary_img_prompt, "summary": "true"},
+                        headers=headers,
+                        timeout=20
+                    )
+                    if txt2img_response.status_code == 200:
+                        emit("summary_image", {
+                            "image_id": txt2img_response.json().get("image_id"),
+                            "caption": summary_img_extracted.caption,
+                            "request_id": request_id
+                        })
+                    else:
+                        logger.error("txt2img_error", status=txt2img_response.status_code)
 
-                    except requests.exceptions.RequestException as e:
-                        logger.error("txt2img_connection_failed", error=str(e))
+                except requests.exceptions.RequestException as e:
+                    logger.error("txt2img_connection_failed", error=str(e))
 
                 # 3. Trigger 3D Object Generation (Step 6)
-                if (object_gen and obj_blueprint_text):
-                    # TODO: Adjust this part using the previous variables
-                    if object_gen:
-                        socketio.start_background_task(
-                            run_object_generation, sid, obj_blueprint_text, obj_presentation_text, language, headers, worker_ctx
-                        )
-
-            # Final Logging
-            answer_text = " ".join(full_answer)
-            logger.info("tutor_answer", full_text_answer=answer_text)
-            emit("text_done", {"status": "completed", "request_id": current_id})
+                if (object_gen):
+                    socketio.start_background_task(
+                        run_object_generation, sid, obj_extracted.prompt, obj_extracted.presentation_speech, language, headers, worker_ctx
+                    )
 
         finally:
             # Clean up: Tell the worker to stop after the queue is empty
@@ -312,7 +304,9 @@ def handle_default_ask(data):
     question_id = data.get("question_id")
     audio_response = data.get("audio_response", True)
     objects_enabled = data.get("objects", False)
-    current_id = data.get("request_id", -1)
+    request_id = data.get("request_id", -1)
+    session_id = data.get("session_id")
+    is_object_explanation = data.get("is_object", False)
 
     # 2. Validation
     pdf_name = active_pdf_by_sid.get(sid)
@@ -323,9 +317,18 @@ def handle_default_ask(data):
     if question_id is None:
         emit("error", {"message": "Missing question_id."}, to=sid)
         return
+    
+    if session_id is None:
+        emit("error", {"message": "Missing session_id."}, to=sid)
+        return
 
     # 3. Retrieve Data from JSON
-    file_path = _get_json_path(pdf_name)
+    if is_object_explanation:
+        base_dir = STARTING_OBJECTS_DIR
+    else:
+        base_dir = PRE_GEN_QUESTIONS_DIR
+
+    file_path = _get_json_path(pdf_name, base_dir)
     target_data = None
     
     if file_path.exists():
@@ -361,27 +364,28 @@ def handle_default_ask(data):
         socketio.sleep(0.3)
         # Emit Text Chunk
         txt = text_chunks[i]
-        emit("text_chunk", {"text": txt, "request_id": current_id})
+        emit("text_chunk", {"text": txt, "request_id": request_id})
         
         # Emit Audio Sentence (if enabled and exists)
         if audio_response and i < len(audio_sentences):
             b64_audio = audio_sentences[i]
             if b64_audio: # Ensure it's not empty
-                emit("audio_sentence", {"base64": b64_audio, "request_id": current_id})
+                emit("audio_sentence", {"base64": b64_audio, "request_id": request_id})
         
         
     socketio.sleep(0.2)
+
     # C. Text Done
-    emit("text_done", {"status": "completed", "request_id": current_id})
+    emit("text_done", {"status": "completed", "request_id": request_id})
 
     # D. Audio Done (if enabled)
     if audio_response:
-        emit("audio_done", {"status": "completed", "request_id": current_id})
+        emit("audio_done", {"status": "completed", "request_id": request_id})
 
     # E. Summary
     summ = target_data.get("summary", {})
     if summ.get("title") or summ.get("body"):
-        emit("summary", {"title": summ.get("title", ""), "body": summ.get("body", []), "request_id": current_id})
+        emit("summary", {"title": summ.get("title", ""), "body": summ.get("body", []), "request_id": request_id})
     socketio.sleep(0.3)
     # F. Summary Image
     summ_img = target_data.get("summary_image", {})
@@ -389,7 +393,7 @@ def handle_default_ask(data):
         emit("summary_image", {
             "image_id": summ_img.get("image_id"),
             "caption": summ_img.get("caption", ""),
-            "request_id": current_id
+            "request_id": request_id
         })
 
     socketio.sleep(10)
@@ -402,10 +406,15 @@ def handle_default_ask(data):
                 "object": obj_data.get("object"),
                 "text": obj_data.get("text", ""),
                 "speech": obj_data.get("speech", ""),
-                "request_id": current_id
+                "request_id": request_id
             })
         
-        emit("objects_done", {"status": "completed", "request_id": current_id})
+        emit("objects_done", {"status": "completed", "request_id": request_id})
+
+    # H. Update chat history
+    user_question = target_data.get("text_question", "")
+    avatar_response = target_data.get("text_response", "")
+    update_chat_history(session_id, user_question, avatar_response)
 
 
 @socketio.on("log")
@@ -542,37 +551,42 @@ def handle_pdf_selected(data):
 
     st, err = rag_manager.get_status(pdf_name)
     
-    # --- Fetch existing questions (if any) ---
+    # Recupero dei dati pre-generati
     existing_questions = _get_existing_questions(pdf_name)
-    # -----------------------------------------
+    starting_objects = _get_starting_objects(pdf_name)
 
     if st == "ready":
         emit("pdf_selected_ack", {
             "pdf_name": pdf_name, 
             "status": "ok",
-            "questions": existing_questions
+            "questions": existing_questions,
+            "objects": starting_objects
         }, to=sid)
         return
+
     if st == "building":
         # opzionale
         emit("pdf_selected_ack", {
             "pdf_name": pdf_name, 
             "status": "building",
-            "questions": existing_questions
+            "questions": existing_questions,
+            "objects": starting_objects
         }, to=sid)
         return
 
     def build_and_ack():
         ok, msg = tpool.execute(rag_manager.ensure_ready, pdf_name)
 
-        # Re-fetch just in case
+        # Re-fetch both just in case something changed during build or simply to allow consistency
         questions_after_build = _get_existing_questions(pdf_name)
+        objects_after_build = _get_starting_objects(pdf_name)
 
         if ok:
             socketio.emit("pdf_selected_ack", {
                 "pdf_name": pdf_name, 
                 "status": "ok",
-                "questions": questions_after_build
+                "questions": questions_after_build,
+                "objects": objects_after_build
             }, to=sid)
         else:
             st2, err2 = rag_manager.get_status(pdf_name)

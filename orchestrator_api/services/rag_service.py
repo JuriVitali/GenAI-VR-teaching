@@ -13,12 +13,17 @@ from dotenv import load_dotenv, find_dotenv
 # Import necessari per l'LLM
 from config.model_config_loader import ModelConfig
 from services.llm_service import get_llm_model
+from pydantic import BaseModel, Field
+from typing import Literal
 
-logger = structlog.get_logger()
+# Define exact valid categories
+class IntentCategory(BaseModel):
+    intent: Literal["definition", "comparison", "overview", "general_question"] = Field(
+        ..., 
+        description="The semantic category of the user's question"
+    )
 
 load_dotenv(find_dotenv())
-
-
 
 class RagService:
     def __init__(
@@ -95,45 +100,29 @@ class RagService:
             return None
 
     def classify_intent(self, question: str) -> str:
-        """
-        Usa l'LLM per classificare l'intento.
-        Ritorna: 'definition', 'comparison', 'overview' o 'general_question'
-        """
         if not self.router_model:
             return "general_question"
 
         try:
-            # Costruisci il prompt
-            prompt = self.router_prompt_template.format(question=question)
+            # Create a version of the model that MUST return the Pydantic object
+            # Note: If your model provider (e.g., Ollama) supports it, this enforces JSON mode.
+            structured_llm = self.router_model.with_structured_output(IntentCategory)
 
             t_start = time.time()
-            response = self.router_model.invoke(prompt)
+            
+            # Invoke directly. The prompt just needs the instructions, 
+            # you can remove the "Respond ONLY with JSON" part from the prompt template.
+            intent_obj = structured_llm.invoke(self.router_prompt_template.format(question=question))
+            
             t_end = time.time()
-            
-            elapsed = (t_end - t_start) * 1000
-            print(f"\n[TIMER] Intent Classification took: {elapsed:.2f} ms")
-            
-            # Invoca l'LLM
-            response = self.router_model.invoke(prompt)
-            content = response.content
+            print(f"\n[TIMER] Intent Classification took: {(t_end - t_start) * 1000:.2f} ms. Intent: {intent_obj.intent}")
 
-            # Parsa il JSON
-            data = self._extract_json_from_response(content)
-            
-            if data and "intent" in data:
-                intent = data["intent"].lower().strip()
-                
-                # Validazione whitelist
-                valid_intents = {"definition", "comparison", "overview", "general_question"}
-                if intent not in valid_intents:
-                    intent = "general_question"
-                return intent
+            # Access the data directly as a python attribute
+            return intent_obj.intent
 
         except Exception as e:
-            logger.error("router_inference_failed", error=str(e))
-        
-        # Fallback sicuro
-        return "general_question"
+            logger.error(f"router_inference_failed: {e}")
+            return "general_question"
     
     def build_index(self, pdf_path: str) -> int:
         try:
