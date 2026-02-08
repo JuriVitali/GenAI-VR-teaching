@@ -37,16 +37,15 @@ tutor:
     **AUDIO SCRIPT**
     - A spoken-word answer to the user.
     - Use ONLY the provided [CONTEXT] below. Do not use outside knowledge.
-    - If the [CONTEXT] does not contain the answer, you must output exactly this string and nothing else:
-      "I cannot find the answer in the provided document."
+    - If the context doesn't contain the answer, clearly state that you don't have this information in the document.
     - Tone: Conversational, clear, full sentences.
-    - Format: Plain text only (no markdown, no bullets).
+    - In this section, do not use bullets, numbering, markdown, emojis, or any special characters such as *, #, ~, •, —.
     - Language: {language}.
 
     **SUMMARY**
     - Start with a short title.
     - Provide 3 or 4 bullet points summarizing the key facts.
-    - Use exactly the "*" symbol for each point. Don't use "*" for markdown.
+    - Use exactly the "*" symbol for each point.
     - Language: {language}.
 
     ### DATA SOURCE
