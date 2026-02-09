@@ -3,6 +3,7 @@ import re
 import json
 import structlog
 import time
+from shared.utils import log_event
 from typing import List, Tuple, Optional, Set
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
@@ -10,7 +11,6 @@ from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
 from langchain_core.documents import Document
 from dotenv import load_dotenv, find_dotenv
-# Import necessari per l'LLM
 from config.model_config_loader import ModelConfig
 from services.llm_service import get_llm_model
 from pydantic import BaseModel, Field
@@ -99,6 +99,7 @@ class RagService:
             logger.warning("router_json_parse_failed", raw_text=text, error=str(e))
             return None
 
+    @log_event("intent_classification", result_mapper=lambda x: {"intent": x})
     def classify_intent(self, question: str) -> str:
         if not self.router_model:
             return "general_question"
@@ -108,14 +109,10 @@ class RagService:
             # Note: If your model provider (e.g., Ollama) supports it, this enforces JSON mode.
             structured_llm = self.router_model.with_structured_output(IntentCategory)
 
-            t_start = time.time()
             
             # Invoke directly. The prompt just needs the instructions, 
             # you can remove the "Respond ONLY with JSON" part from the prompt template.
             intent_obj = structured_llm.invoke(self.router_prompt_template.format(question=question))
-            
-            t_end = time.time()
-            print(f"\n[TIMER] Intent Classification took: {(t_end - t_start) * 1000:.2f} ms. Intent: {intent_obj.intent}")
 
             # Access the data directly as a python attribute
             return intent_obj.intent
@@ -209,6 +206,7 @@ class RagService:
 
         return sorted(docs, key=key)
 
+    @log_event("rag_retrieval", result_mapper=lambda x: {"sources_count": len(x[1])})
     def retrieve_context(
         self,
         question: str,

@@ -73,6 +73,7 @@ def get_image():
 
     structlog.contextvars.bind_contextvars(img_id=img_id)
 
+
     # Select directory
     img_dir = PRE_GEN_IMAGES_DIR if is_pregen else GEN_IMAGES_DIR
 

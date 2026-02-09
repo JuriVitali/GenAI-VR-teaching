@@ -200,7 +200,7 @@ def handle_ask(data):
 
             is_negative_answer = False
 
-            answer_context, sources = retrieve_context(text_question, pdf_name)
+            answer_context, sources = retrieve_context(text_question, pdf_name, session_id=session_id)
 
             # --- STREAM LOOP ---
             for text_content, message_type in stream_text_answer_by_sentence(text_question, language, pdf_name, sid, answer_context):
@@ -401,7 +401,7 @@ def handle_default_ask(data):
     if objects_enabled:
         obj_data = target_data.get("object", {})
         # Only emit 'object' event if there is actual object data
-        if obj_data.get("object"):
+        if isinstance(obj_data, dict) and obj_data.get("object"):
              emit("object", {
                 "object": obj_data.get("object"),
                 "text": obj_data.get("text", ""),
@@ -416,6 +416,36 @@ def handle_default_ask(data):
     avatar_response = target_data.get("text_response", "")
     update_chat_history(session_id, user_question, avatar_response)
 
+    summary_data = target_data.get("summary", {})
+    raw_obj_data = target_data.get("object")
+    
+    log_obj_id = ""
+    log_obj_text = ""
+    is_existing_object = False
+    
+    if isinstance(raw_obj_data, dict):
+        log_obj_id = raw_obj_data.get("object", "")
+        log_obj_text = raw_obj_data.get("text", "")
+        is_existing_object = False
+        
+    elif isinstance(raw_obj_data, str):
+        # CASO 2: Solo stringa ID (Oggetto già in scena)
+        log_obj_id = raw_obj_data
+        log_obj_text = "[INTERACTION_WITH_EXISTING_OBJECT]" 
+        is_existing_object = True
+    
+    logger.info(
+        "default_ask_served",
+        question_id=question_id,
+        question=user_question,
+        answer=avatar_response,
+        summary_title=summary_data.get("title", ""),
+        summary_body=summary_data.get("body", []),
+        object_presentation_text=log_obj_text, 
+        object_id=log_obj_id,
+        is_existing_object=is_existing_object,
+        session_id=session_id
+    )
 
 @socketio.on("log")
 def handle_log_batch(data):
@@ -575,7 +605,8 @@ def handle_pdf_selected(data):
         return
 
     def build_and_ack():
-        ok, msg = tpool.execute(rag_manager.ensure_ready, pdf_name)
+        session_id = SID_TO_SESSION_ID.get(sid)
+        ok, msg = tpool.execute(rag_manager.ensure_ready, pdf_name, session_id = session_id)
 
         # Re-fetch both just in case something changed during build or simply to allow consistency
         questions_after_build = _get_existing_questions(pdf_name)

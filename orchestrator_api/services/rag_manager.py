@@ -31,7 +31,9 @@ class RagManager:
             ollama_embedding_model=self.embedding_model,
         )
 
-    def ensure_ready(self, pdf_name: str) -> Tuple[bool, str]:
+    def ensure_ready(self, pdf_name: str, session_id: str = None) -> Tuple[bool, str]:
+        if session_id:
+            structlog.contextvars.bind_contextvars(session_id=session_id)
         if pdf_name not in PDF_MAP:
             return False, "unknown_pdf"
 

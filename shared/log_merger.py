@@ -84,17 +84,17 @@ def merge_and_cleanup_session_logs(session_id: str, frontend_base_path: str, bac
         
         logger.info("merge_success", output=output_path)
         
-        if os.path.exists(frontend_session_dir):
-             shutil.rmtree(frontend_session_dir)
-             logger.info("cleanup_success", deleted_dir=frontend_session_dir)
+        #if os.path.exists(frontend_session_dir):
+         #    shutil.rmtree(frontend_session_dir)
+          #   logger.info("cleanup_success", deleted_dir=frontend_session_dir)
         
-        if os.path.exists(backend_log_path):
-            try:
-                os.remove(backend_log_path)
-                print(f"[MERGER CLEANUP] Deleted backend log: {backend_log_path}")
+        #if os.path.exists(backend_log_path):
+         #   try:
+          #      os.remove(backend_log_path)
+           #     print(f"[MERGER CLEANUP] Deleted backend log: {backend_log_path}")
 
-            except OSError as e:
-                print(f"[MERGER ERROR] Could not delete backend log (file locked?): {e}")
+            #except OSError as e:
+             #   print(f"[MERGER ERROR] Could not delete backend log (file locked?): {e}")
             
         print(f"[MERGER SUCCESS] LOG MERGE COMPLETED. SESSION: {session_id} | SAVED TO: {output_path}")
         return True

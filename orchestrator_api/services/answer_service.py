@@ -12,6 +12,7 @@ from TTS.api import TTS
 import torch
 import os
 import tempfile
+import time
 import re
 from shared.utils import log_event
 from services.rag_singleton import rag_manager
@@ -46,8 +47,10 @@ def transcribe_audio(audio_path):
 def detect_language(text_input):
     return detect(text_input)
 
-def retrieve_context(question: str, pdf_name: str):
+def retrieve_context(question: str, pdf_name: str, session_id: str):
     try:
+        if session_id:
+            structlog.contextvars.bind_contextvars(session_id=session_id)
         # Retrieve context
         context, sources = rag_manager.retrieve_context(pdf_name, question, k=5)
         structlog.contextvars.bind_contextvars(rag_sources=sources, rag_pdf=pdf_name)
@@ -58,8 +61,10 @@ def retrieve_context(question: str, pdf_name: str):
     finally:
         return context, sources
 
-@log_event("text_answer_generation")
 def stream_text_answer_by_sentence(question: str, language: str, pdf_name: str , session_id: str, context):
+    
+    logger.info("text_answer_generation_started", question=question)
+    start_time = time.perf_counter()
     structlog.contextvars.bind_contextvars(question=question)
     
     # Construct the Message List
@@ -146,76 +151,84 @@ def stream_text_answer_by_sentence(question: str, language: str, pdf_name: str ,
             return yielded_items, leftover
 
     # --- STREAMING LOOP ---
-    for chunk in question_answerer_model.stream(messages):
-        text_chunk = chunk.content
-        chunks_received += 1
-        raw_answer_full += text_chunk
-        
-        # 1. Handle Thinking Tags (DeepSeek R1 / Generic)
-        if "<think>" in text_chunk:
-            inside_think_tag = True
-            text_chunk = text_chunk.replace("<think>", "")
-        
-        if "</think>" in text_chunk:
-            inside_think_tag = False
-            parts = text_chunk.split("</think>")
-            text_chunk = parts[1] if len(parts) > 1 else ""
-
-        if inside_think_tag or not text_chunk:
-            continue
-
-        buffer += text_chunk
-        full_answer_accumulator += text_chunk
-
-        # 2. Detect Section Transitions
-        # Check if ANY marker appears in the buffer
-        found_marker = None
-        found_marker_index = -1
-
-        for marker in MARKERS:
-            if marker in buffer:
-                # We need to find the earliest marker in the buffer to split correctly
-                idx = buffer.find(marker)
-                if found_marker is None or idx < found_marker_index:
-                    found_marker = marker
-                    found_marker_index = idx
-
-        # 3. Handle Transition
-        if found_marker:
-            # content_before belongs to the OLD section
-            content_before = buffer[:found_marker_index]
+    try:
+        for chunk in question_answerer_model.stream(messages):
+            text_chunk = chunk.content
+            chunks_received += 1
+            raw_answer_full += text_chunk
             
-            # Flush the OLD section
+            # 1. Handle Thinking Tags (DeepSeek R1 / Generic)
+            if "<think>" in text_chunk:
+                inside_think_tag = True
+                text_chunk = text_chunk.replace("<think>", "")
+            
+            if "</think>" in text_chunk:
+                inside_think_tag = False
+                parts = text_chunk.split("</think>")
+                text_chunk = parts[1] if len(parts) > 1 else ""
+
+            if inside_think_tag or not text_chunk:
+                continue
+
+            buffer += text_chunk
+            full_answer_accumulator += text_chunk
+
+            # 2. Detect Section Transitions
+            # Check if ANY marker appears in the buffer
+            found_marker = None
+            found_marker_index = -1
+
+            for marker in MARKERS:
+                if marker in buffer:
+                    # We need to find the earliest marker in the buffer to split correctly
+                    idx = buffer.find(marker)
+                    if found_marker is None or idx < found_marker_index:
+                        found_marker = marker
+                        found_marker_index = idx
+
+            # 3. Handle Transition
+            if found_marker:
+                # content_before belongs to the OLD section
+                content_before = buffer[:found_marker_index]
+                
+                # Flush the OLD section
+                if current_marker:
+                    items, _ = process_section_content(content_before, current_marker, is_final_flush=True)
+                    for item in items: yield item
+                
+                # Start the NEW section
+                current_marker = found_marker
+                
+                # Remove the marker from buffer and continue processing the rest
+                # We add a generic strip to remove newlines immediately after markers
+                buffer = buffer[found_marker_index + len(found_marker):].lstrip()
+
+            # 4. Incremental Processing (within current section)
             if current_marker:
-                items, _ = process_section_content(content_before, current_marker, is_final_flush=True)
+                items, new_buffer = process_section_content(buffer, current_marker, is_final_flush=False)
                 for item in items: yield item
-            
-            # Start the NEW section
-            current_marker = found_marker
-            
-            # Remove the marker from buffer and continue processing the rest
-            # We add a generic strip to remove newlines immediately after markers
-            buffer = buffer[found_marker_index + len(found_marker):].lstrip()
-
-        # 4. Incremental Processing (within current section)
-        if current_marker:
-            items, new_buffer = process_section_content(buffer, current_marker, is_final_flush=False)
+                buffer = new_buffer
+    
+        # --- FINAL FLUSH ---
+        # Process whatever is left in the buffer for the last active section
+        if current_marker and buffer.strip():
+            items, _ = process_section_content(buffer, current_marker, is_final_flush=True)
             for item in items: yield item
-            buffer = new_buffer
-    
-    # --- FINAL FLUSH ---
-    # Process whatever is left in the buffer for the last active section
-    if current_marker and buffer.strip():
-        items, _ = process_section_content(buffer, current_marker, is_final_flush=True)
-        for item in items: yield item
-    
-    # --- LOGGING & HISTORY ---
-    print("\n" + "="*50)
-    print("FULL LLM RESPONSE (RAW):")
-    print(raw_answer_full)
-    print("="*50 + "\n")
+        
+        # --- LOGGING & HISTORY ---
+        print("\n" + "="*50)
+        print("FULL LLM RESPONSE (RAW):")
+        print(raw_answer_full)
+        print("="*50 + "\n")
 
-    update_chat_history(session_id, question, full_answer_accumulator)
+        update_chat_history(session_id, question, full_answer_accumulator)
+        duration = time.perf_counter() - start_time
+        logger.info("text_answer_generation_finished", duration=duration, chunks_received=chunks_received)
+    
+    except Exception as e:
+        duration = time.perf_counter() - start_time
+        logger.error("text_answer_generation_failed", error=str(e), duration=duration)
+        raise e
 
 #@log_event("audio_generation")
 def synthesize_wav(sentence, language=xtts_config["default_language"], context_data=None):
