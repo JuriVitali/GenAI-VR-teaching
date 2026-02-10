@@ -13,6 +13,7 @@ import os
 import uuid
 from shared.utils import log_event
 import yaml
+from rembg import remove
 
 # Load environment variables    
 load_dotenv(find_dotenv())
@@ -41,6 +42,8 @@ def generate_object(prompt_img_id: str):
     img_path = f"{gen_images_dir}/{prompt_img_id}.png"
     prompt_img = Image.open(img_path)
 
+    prompt_img = remove(prompt_img)
+
     outputs = pipeline_from_image.run(
         prompt_img, 
         seed=random.randint(0, 1000),
@@ -57,8 +60,8 @@ def generate_object(prompt_img_id: str):
     obj_filename = f"{uuid.uuid4().hex}"
 
     # DEBUG: Render the outputs
-    # video = render_utils.render_video(outputs['gaussian'][0])['color'] 
-    # imageio.mimsave(f"{renders_dir}/{obj_filename}.mp4", video, fps=30)
+    video = render_utils.render_video(outputs['gaussian'][0])['color'] 
+    imageio.mimsave(f"{renders_dir}/{obj_filename}.mp4", video, fps=30)
     
     # Postprocessing
     glb = postprocessing_utils.to_glb(

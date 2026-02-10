@@ -44,7 +44,9 @@ class VisualAsset3D(BaseModel):
     )
     presentation_speech: str = Field(
         ..., 
-        description="A single spoken sentence for the Avatar to introduce this object. Language: Target Language."
+        description=(
+            "A single spoken sentence for the Avatar to introduce this object. Language: Target Language."
+        )
     )
 
 # --- MAIN CONTAINER ---
