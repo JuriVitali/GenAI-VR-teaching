@@ -28,7 +28,7 @@ intent_classifier:
 
 tutor:
   model: "deepseek-r1:8b"
-  temperature: 0.3
+  temperature: 0.6
   prompt: >
     You are an expert Educational Tutor of a single student. 
     Your goal is to answer the student's question based strictly on the provided material.
