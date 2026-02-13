@@ -235,18 +235,25 @@ def synthesize_wav(sentence, language=xtts_config["default_language"], context_d
     if context_data:
         structlog.contextvars.bind_contextvars(**context_data)
     structlog.contextvars.bind_contextvars(sentence=sentence, language=language)
+
     if sentence.endswith("."):
         sentence = sentence[:-1]
+
     sentence = sentence + " "
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
         output_path = tmp.name
+
     tts_model.tts_to_file(
         text=sentence,
         speaker=xtts_config["speaker"],
         language=language,
         file_path=output_path
     )
+
     with open(output_path, "rb") as f:
         audio_base64 = base64.b64encode(f.read()).decode()
+
     os.remove(output_path)
+    
     return audio_base64

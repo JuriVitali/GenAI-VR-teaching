@@ -221,3 +221,5 @@ shared/generated_assets/summary_images/
 
 #tests
 tests/
+
+orchestrator_api/websocket/ws_handlers_pregen.py

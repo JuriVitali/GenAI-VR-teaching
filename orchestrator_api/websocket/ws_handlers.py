@@ -389,20 +389,22 @@ def handle_default_ask(data):
     socketio.sleep(0.3)
     # F. Summary Image
     summ_img = target_data.get("summary_image", {})
+    image_id = summ_img.get("image_id")
+    image_caption = summ_img.get("caption", "")
     if summ_img.get("image_id"):
         emit("summary_image", {
-            "image_id": summ_img.get("image_id"),
-            "caption": summ_img.get("caption", ""),
+            "image_id": image_id,
+            "caption": image_caption,
             "request_id": request_id
         })
 
-    socketio.sleep(10)
+    socketio.sleep(2)
     # G. Objects (if enabled)
     if objects_enabled:
-        obj_data = target_data.get("object", {})
         # Only emit 'object' event if there is actual object data
+        obj_data = target_data.get("object", {})
         if isinstance(obj_data, dict) and obj_data.get("object"):
-             emit("object", {
+            emit("object", {
                 "object": obj_data.get("object"),
                 "text": obj_data.get("text", ""),
                 "speech": obj_data.get("speech", ""),
@@ -410,6 +412,13 @@ def handle_default_ask(data):
             })
         
         emit("objects_done", {"status": "completed", "request_id": request_id})
+    elif is_object_explanation:
+        obj_id = target_data.get("object", {})
+    else:
+        obj_data = {
+            "object": None,
+            "text": None
+        }
 
     # H. Update chat history
     user_question = target_data.get("text_question", "")
@@ -417,35 +426,32 @@ def handle_default_ask(data):
     update_chat_history(session_id, user_question, avatar_response)
 
     summary_data = target_data.get("summary", {})
-    raw_obj_data = target_data.get("object")
     
-    log_obj_id = ""
-    log_obj_text = ""
-    is_existing_object = False
-    
-    if isinstance(raw_obj_data, dict):
-        log_obj_id = raw_obj_data.get("object", "")
-        log_obj_text = raw_obj_data.get("text", "")
-        is_existing_object = False
-        
-    elif isinstance(raw_obj_data, str):
-        # CASO 2: Solo stringa ID (Oggetto già in scena)
-        log_obj_id = raw_obj_data
-        log_obj_text = "[INTERACTION_WITH_EXISTING_OBJECT]" 
-        is_existing_object = True
-    
-    logger.info(
-        "default_ask_served",
-        question_id=question_id,
-        question=user_question,
-        answer=avatar_response,
-        summary_title=summary_data.get("title", ""),
-        summary_body=summary_data.get("body", []),
-        object_presentation_text=log_obj_text, 
-        object_id=log_obj_id,
-        is_existing_object=is_existing_object,
-        session_id=session_id
-    )
+    if is_object_explanation:
+        logger.info(
+            "starting_object_explanation_served",
+            answer=avatar_response,
+            summary_title=summary_data.get("title", ""),
+            summary_body=summary_data.get("body", []),
+            image_id=image_id,
+            image_caption=image_caption,
+            object_id=obj_id,
+            session_id=session_id
+        )
+    else:
+        logger.info(
+            "default_answer_served",
+            question_id=question_id,
+            question=user_question,
+            answer=avatar_response,
+            summary_title=summary_data.get("title", ""),
+            summary_body=summary_data.get("body", []),
+            image_id=image_id,
+            image_caption=image_caption,
+            object_presentation_text=obj_data.get("text", ""), 
+            object_id=obj_data.get("object"),
+            session_id=session_id
+        )
 
 @socketio.on("log")
 def handle_log_batch(data):
