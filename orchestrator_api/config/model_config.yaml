@@ -1,9 +1,8 @@
 intent_classifier:
-  model: "deepseek-r1:8b"
+  model: "gemma2:9b"
   temperature: 0.0
   top_p: 0.1
-  top_k: 1    
-  num_predict: 50
+  top_k: 1
   prompt: >
     You are a semantic router for a RAG system. 
     Analyze the user's question and classify it into exactly one of the semantic categories below.
@@ -27,8 +26,8 @@ intent_classifier:
     User Question: "{question}"
 
 tutor:
-  model: "deepseek-r1:8b"
-  temperature: 0.6
+  model: "gemma2:9b"
+  temperature: 0.3
   prompt: >
     You are an expert Educational Tutor of a single student. 
     Your goal is to answer the student's question based strictly on the provided material.
