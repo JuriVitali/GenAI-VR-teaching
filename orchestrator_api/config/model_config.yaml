@@ -1,7 +1,8 @@
 intent_classifier:
-  model: "deepseek-r1:8b"
-  temperature: 0.1
+  model: "gemma2:9b"
+  temperature: 0.0
   top_p: 0.1
+  top_k: 1
   prompt: >
     You are a semantic router for a RAG system. 
     Analyze the user's question and classify it into exactly one of the semantic categories below.
@@ -25,8 +26,8 @@ intent_classifier:
     User Question: "{question}"
 
 tutor:
-  model: "deepseek-r1:8b"
-  temperature: 0.6
+  model: "gemma2:9b"
+  temperature: 0.3
   prompt: >
     You are an expert Educational Tutor of a single student. 
     Your goal is to answer the student's question based strictly on the provided material.
@@ -56,8 +57,10 @@ tutor:
     **AUDIO SCRIPT**
     ...
     **SUMMARY**
-    ...
-    """
+    (write the title here)
+    * (point 1)
+    * (point 2)
+    * (point 3)
 
 xtts:
   model: "tts_models/multilingual/multi-dataset/xtts_v2"
@@ -69,7 +72,7 @@ whisper:
 
 prompt_extraction:
   model: "deepseek-r1:8b"
-  temperature: 0.5
+  temperature: 0.6
   prompt: >
     You are an expert Visual Content Director for a VR system.
     Your goal is to design the visual assets based on the User's Question and the Avatar's Answer.
@@ -87,19 +90,29 @@ prompt_extraction:
     ### GUIDELINES FOR GENERATION
 
     **1. 2D IMAGE GUIDELINES:**
-    - **Context:** Create a realistic illustration or historical scene.
-    - **Constraints:** - **NO SPLIT SCREENS:** Unless the user explicitly asks "Compare X and Y", always generate a single cohesive scene.
-      - **NO CHARTS:** Never describe bar charts, diagrams with text, or infographics.
-      - **NO TEXT:** Do not include labels or text inside the image description.
+      **PROMPT**
+      - **Context:** Create a realistic illustration or historical scene.
+      - **Constraints:** - **NO SPLIT SCREENS:** Unless the user explicitly asks "Compare X and Y", always generate a single cohesive scene.
+        - **NO CHARTS:** Never describe bar charts, diagrams with text, or infographics.
+        - **NO TEXT:** Do not include labels or text inside the image description.
+      **CAPTION**
+      - A concise figure legend explaining the image (max 15 words). 
+      - Language: "{language}".
 
     **2. 3D OBJECT GUIDELINES (Trellis Optimized):**
-    - **Context:** Select a SINGLE physical object mentioned in the answer.
-    - **Style Enforcer:** You must force a photorealistic look to avoid "toy-like" results.
-    - **Solidification Logic:** Trellis fails with transparency. 
-      - If the object is "Water", describe "Solid blue crystal".
-      - If "Glass", describe "Opaque ceramic".
-    - **Visual Style:** Use exactly this phrasing pattern:
-      *"Professional studio photography of [INSERT OBJECT HERE], shot from a high-angle three-quarter view (45 degrees) to reveal depth and volume. Soft directional lighting creating subtle shadows to define shape, volumetric form, sharp focus, 8k, highly detailed, solid white background, uncropped, distinct separation from background."*
+      **PROMPT**
+      - **Context:** Select a SINGLE physical object mentioned in the answer.
+      - **Style Enforcer:** You must force a photorealistic look to avoid "toy-like" results.
+      - **Solidification Logic:** Trellis fails with transparency. 
+        - If the object is "Water", describe "Solid blue crystal".
+        - If "Glass", describe "Opaque ceramic".
+      - **Visual Style:** Use exactly this phrasing pattern:
+        *"Professional studio photography of [INSERT OBJECT HERE], shot from a high-angle three-quarter view (45 degrees) to reveal depth and volume. Soft directional lighting creating subtle shadows to define shape, volumetric form, sharp focus, 8k, highly detailed, solid white background, uncropped, distinct separation from background."*
+      **SPEECH**
+      - A single spoken sentence for the Avatar to introduce this object.
+      - The Avatar should acknowledge the object appearing in the VR space.
+      - Start with phrases like "Here is...", "I have generated...", or "Take a look at this...".
+      - Connect the object to the [AVATAR ANSWER].
 
     **3. LANGUAGE:** 
     - Visual Prompts must be in **English**.

@@ -6,7 +6,7 @@ import time
 from shared.utils import log_event
 from typing import List, Tuple, Optional, Set
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
 from langchain_core.documents import Document
@@ -130,7 +130,7 @@ class RagService:
         except Exception as e:
             print(f"[RAG] Errore verifica index esistente: {e}, rebuild.")
     
-        loader = PyPDFLoader(pdf_path)
+        loader = PyMuPDFLoader(pdf_path)
         raw_docs = loader.load()
         
         for doc in raw_docs:

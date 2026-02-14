@@ -26,11 +26,12 @@ def get_object():
     """
     is_pregen = request.args.get("pre_generated", "").lower() == "true"    
     obj_id = request.args.get("filename")
+    session_id = request.args.get("session_id")
     if not obj_id:
         logger.warn("missing_parameter", parameter="filename")
         return jsonify({"error": "Missing 'filename' parameter"}), 400
 
-    structlog.contextvars.bind_contextvars(obj_id=obj_id)
+    structlog.contextvars.bind_contextvars(obj_id=obj_id, session_id=session_id)
 
     # Select directory
     obj_dir = PRE_GEN_OBJECTS_DIR if is_pregen else GEN_OBJECTS_DIR
@@ -67,11 +68,12 @@ def get_image():
     """
     is_pregen = request.args.get("pre_generated", "").lower() == "true" 
     img_id = request.args.get("filename")
+    session_id = request.args.get("session_id")
     if not img_id:
         logger.warn("missing_parameter", parameter="filename")
         return jsonify({"error": "Missing 'filename' parameter"}), 400
 
-    structlog.contextvars.bind_contextvars(img_id=img_id)
+    structlog.contextvars.bind_contextvars(img_id=img_id, session_id=session_id)
 
 
     # Select directory
