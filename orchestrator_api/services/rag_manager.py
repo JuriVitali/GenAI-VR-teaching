@@ -2,23 +2,23 @@ import os
 import threading
 from typing import Tuple, List, Optional
 import structlog
-from config.pdf_map import PDF_MAP
 from services.rag_service import RagService
 
 log = structlog.get_logger()
 
 class RagManager:
-    def __init__(self, persist_root: str, embedding_model: str):
+    def __init__(self, persist_root: str, embedding_model: str, pdf_dir: Optional[str] = None):
         self.persist_root = persist_root
         self.embedding_model = embedding_model
+        self.pdf_dir = pdf_dir or os.getenv("PDF_DIR")
 
         self._lock = threading.Lock()
         self._services = {}
-        self._status = {k: "missing" for k in PDF_MAP}
-        self._error = {k: None for k in PDF_MAP}
+        self._status = {} 
+        self._error = {}
 
     def get_status(self, pdf_name: str) -> Tuple[str, Optional[str]]:
-        return self._status.get(pdf_name, "error"), self._error.get(pdf_name)
+        return self._status.get(pdf_name, "missing"), self._error.get(pdf_name)
 
     def _make_service(self, pdf_name: str) -> RagService:
         collection = f"pdf_knowledge_{pdf_name}"
@@ -34,18 +34,21 @@ class RagManager:
     def ensure_ready(self, pdf_name: str, session_id: str = None) -> Tuple[bool, str]:
         if session_id:
             structlog.contextvars.bind_contextvars(session_id=session_id)
-        if pdf_name not in PDF_MAP:
-            return False, "unknown_pdf"
+        
+        pdf_path = os.path.join(self.pdf_dir, f"{pdf_name}.pdf")
 
         with self._lock:
-            if self._status[pdf_name] == "ready":
+            status = self._status.get(pdf_name, "missing")
+            if status == "ready":
                 return True, "ready"
-            if self._status[pdf_name] == "building":
+            if status == "building":
                 return False, "building"
+            
+            # Impostiamo lo stato a building per evitare elaborazioni parallele
             self._status[pdf_name] = "building"
             self._error[pdf_name] = None
 
-        pdf_path = PDF_MAP[pdf_name]
+        # Verifica se il file esiste fisicamente sul disco
         if not os.path.exists(pdf_path):
             with self._lock:
                 self._status[pdf_name] = "error"

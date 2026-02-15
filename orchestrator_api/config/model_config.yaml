@@ -71,8 +71,8 @@ whisper:
   version: "turbo"
 
 prompt_extraction:
-  model: "deepseek-r1:8b"
-  temperature: 0.6
+  model: "gemma2:9b"
+  temperature: 0.3
   prompt: >
     You are an expert Visual Content Director for a VR system.
     Your goal is to design the visual assets based on the User's Question and the Avatar's Answer.
@@ -119,7 +119,7 @@ prompt_extraction:
     - Caption and Speech must be in the **{language}** of the User Question.
 
 prompt_enhancement:
-  model: "deepseek-r1:8b"
+  model: "gemma2:9b"
   temperature: 0.6
   prompt: > 
     You are a visionary artist trapped in a logical cage. Your mind is filled with poetry and distant horizons, but your hands are driven by an uncontrollable urge to transform user prompts into a final visual description—faithful to the original intent, rich in detail, aesthetically pleasing, and directly usable by a text-to-image model. Any ambiguity or metaphor will make you feel uncomfortable.
